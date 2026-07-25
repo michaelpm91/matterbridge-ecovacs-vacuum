@@ -1,7 +1,7 @@
 {
   "name": "matterbridge-ecovacs",
   "version": "0.1.0",
-  "description": "Matterbridge plugin exposing Ecovacs robot vacuums (Deebot, yeedi) as Matter RVC devices (HomeKit, Alexa, Google Home, SmartThings)",
+  "description": "Matterbridge plugin for Ecovacs robot vacuums (Deebot, yeedi)",
   "author": "michaelpm91 <michaelpm91@googlemail.com>",
   "homepage": "https://github.com/michaelpm91/matterbridge-ecovacs#readme",
   "license": "Apache-2.0",
