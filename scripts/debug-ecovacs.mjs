@@ -67,7 +67,7 @@ const passwordHash = EcoVacsAPI.md5(rawPassword);
 
 log('username', username);
 log('password (raw length)', rawPassword.length);
-log('password MD5 hash', passwordHash);
+// Never print the MD5 hash — for the Ecovacs API the MD5 *is* the credential.
 log('country (raw)', rawCountry);
 log('country (mapped)', country);
 log('continent', continent);
