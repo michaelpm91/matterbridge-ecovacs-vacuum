@@ -20,11 +20,12 @@ import {
   CLEAN_MODE_NUMBER,
   ECOVACS_EXTRA_DESCRIPTIONS,
   ECOVACS_TO_RVC_ERROR,
+  ECOVACS_WORK_MODE,
   OP_STATE,
   RUN_MODE,
   RVC_ERROR,
 } from './constants.js';
-import type { ModelDefinition } from './models/types.js';
+import type { CleanModeKey, ModelDefinition } from './models/types.js';
 import type { EcovacsPlatform } from './platform.js';
 
 /** A named room (spot area) from the robot's saved map. */
@@ -570,27 +571,22 @@ export class VacuumDevice {
   // ── Cleaning commands ───────────────────────────────────────────────────────
 
   /**
-   * Send the setSweepMode command appropriate for the current clean mode, if the
-   * model supports mop control.
+   * Pin the robot's cleaning type to the currently selected Matter clean mode
+   * before starting a clean, on models that support `setWorkMode`.
    *
-   * On some all-in-one stations (X2 Omni) sending DisableSweepMode on a
-   * vacuum-only run tells the station that mopping is active and triggers an
-   * unwanted mop pad wash — those models skip the command entirely.
+   * Always sent (even for vacuum-only) so state left behind by the Ecovacs app
+   * — e.g. mopping enabled from a previous run — can never leak into a
+   * HomeKit-initiated clean. Verified live on an X2 Omni: `setWorkMode` is
+   * side-effect-free at the dock, whereas `setSweepMode` (which is a
+   * scrubbing-style toggle, not the vacuum/mop selector) triggers a mop-pad
+   * wash merely by being sent.
    */
-  private applySweepMode(): void {
-    if (!this.definition.supportsMopping) return;
-    if (this.currentCleanMode === CLEAN_MODE_NUMBER.mop) {
-      this.log.info('Sending EnableSweepMode (mop-only clean)');
-      this.vacbot.run('EnableSweepMode');
-    } else if (this.currentCleanMode === CLEAN_MODE_NUMBER.vacuumAndMop || this.currentCleanMode === CLEAN_MODE_NUMBER.mopAfterVacuum) {
-      this.log.info('Sending DisableSweepMode (vacuum+mop clean)');
-      this.vacbot.run('DisableSweepMode');
-    } else if (this.definition.skipSweepModeOnVacuumOnly) {
-      this.log.info('Vacuum-only clean — no setSweepMode sent');
-    } else {
-      this.log.info('Sending DisableSweepMode (vacuum-only clean)');
-      this.vacbot.run('DisableSweepMode');
-    }
+  private applyWorkMode(): void {
+    if (this.definition.cleanTypeStrategy !== 'workMode') return;
+    const key = (Object.keys(CLEAN_MODE_NUMBER) as CleanModeKey[]).find((k) => CLEAN_MODE_NUMBER[k] === this.currentCleanMode) ?? 'vacuum';
+    const mode = ECOVACS_WORK_MODE[key];
+    this.log.info(`Setting work mode: ${key} (setWorkMode ${mode})`);
+    this.vacbot.run('Generic', 'setWorkMode', { mode });
   }
 
   private startClean(): void {
@@ -607,7 +603,7 @@ export class VacuumDevice {
     if (this.selectedAreaIds.length > 0 && this.definition.spotAreaStrategy !== 'none') {
       const ecovacsIds = this.selectedAreaIds.map((id) => this.spotAreaMap.get(id)).filter(Boolean) as string[];
       if (ecovacsIds.length > 0) {
-        this.applySweepMode();
+        this.applyWorkMode();
         this.startSpotAreaClean(ecovacsIds);
         return;
       }
@@ -616,7 +612,7 @@ export class VacuumDevice {
     // Full-house clean based on current clean mode.
     // NOTE: vacbot.clean() sends the non-V2 'Clean' command which 950-type robots ignore —
     // the model definition selects the command variant the firmware accepts.
-    this.applySweepMode();
+    this.applyWorkMode();
     this.log.info(`Starting full clean (${this.definition.cleanCommand})`);
     this.vacbot.run(this.definition.cleanCommand);
   }

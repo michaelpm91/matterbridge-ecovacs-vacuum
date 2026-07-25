@@ -57,14 +57,18 @@ export interface ModelDefinition {
   cleanCommand: 'Clean' | 'Clean_V2';
   /** How to start a clean restricted to selected rooms. */
   spotAreaStrategy: SpotAreaStrategy;
-  /** Robot has a mopping system controllable via EnableSweepMode/DisableSweepMode. */
-  supportsMopping: boolean;
   /**
-   * Do not send any setSweepMode command on vacuum-only cleans. On all-in-one
-   * stations (X2 Omni) sending DisableSweepMode marks mopping as active and
-   * triggers an unwanted mop pad wash cycle even for vacuum-only runs.
+   * How the cleaning type (vacuum / mop / both) is selected on the robot:
+   * - `workMode` — X1/X2-generation firmware: `setWorkMode` with
+   *   0=vacuum&mop, 1=vacuum, 2=mop, 3=mop after vacuum. Sent before every
+   *   clean so stale state left by the Ecovacs app can never leak into a run.
+   *   (Note: `setSweepMode` is NOT the type selector — it is a scrubbing-style
+   *   toggle whose mere invocation triggers a mop-pad wash at Omni stations;
+   *   the plugin never sends it.)
+   * - `none`    — robot has no selectable cleaning type; nothing is sent.
+   *   `cleanModes` should then usually only expose 'vacuum'.
    */
-  skipSweepModeOnVacuumOnly?: boolean;
+  cleanTypeStrategy: 'workMode' | 'none';
   /**
    * Firmware rejects GetCleanState polling (X2 responds body.code=20003
    * "rcp not support") and pushes CleanReport events instead. When true the

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Cleaning type (Vacuum / Mop / Vacuum & Mop / Mop after Vacuum) is now selected with `setWorkMode`, pinned before every clean. Verified live on an X2 Omni: the previously used `setSweepMode` is a scrubbing-style toggle, not the vacuum/mop selector — a "vacuum-only" clean could mop the floor if the Ecovacs app had left mopping enabled, and merely sending `setSweepMode` triggered a mop-pad wash at the station. Model definitions now declare `cleanTypeStrategy: 'workMode' | 'none'` (replaces `supportsMopping`/`skipSweepModeOnVacuumOnly`).
+
+### Added
+
+- `scripts/verify-device.mjs` — one-time Ecovacs device verification (login error 1013). Since ~2026-07-14 Ecovacs requires each API client device ID to complete an email verification once; this ports the flow from DeebotUniverse/client.py PR #1706.
+- Work-mode and sweep-mode commands in the interactive test console (`wm`, `wm0`–`wm3`, `sm0`, `sm1`) and a `--device N` selector in both debug scripts.
+
 ## [0.1.0] - 2026-07-25
 
 First public release, formalised from the `matterbridge-deebot-x2` prototype.

@@ -128,8 +128,7 @@ const publicKeyDer = Buffer.from(JSON.parse(entry.value).publicKey, 'base64');
 const publicKey = crypto.createPublicKey({ key: publicKeyDer, format: 'der', type: 'spki' });
 console.log('[verify] ✓ Public key received');
 
-const encryptAccount = () =>
-  crypto.publicEncrypt({ key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from(username)).toString('base64');
+const encryptAccount = () => crypto.publicEncrypt({ key: publicKey, padding: crypto.constants.RSA_PKCS1_PADDING }, Buffer.from(username)).toString('base64');
 
 console.log('[verify] Requesting verification code (user/sendEmailVerifyCode)...');
 await callPrivateApi('user/sendEmailVerifyCode', {

@@ -22,3 +22,6 @@ temp/
 
 # IDE
 .idea/
+
+# Local credentials for debug scripts (never commit)
+.ecovacs.env

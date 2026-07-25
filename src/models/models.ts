@@ -25,11 +25,11 @@ export const MODELS: Record<string, ModelDefinition> = {
     notes:
       'X2 firmware rejects GetCleanState (body.code=20003 "rcp not support") and pushes CleanReport instead. ' +
       'Room cleans must use clean_V2 type=freeClean — SpotArea_V2 is rejected. ' +
-      'Sending DisableSweepMode on vacuum-only runs triggers an unwanted mop pad wash at the Omni station.',
+      'Cleaning type is selected with setWorkMode (verified live); setSweepMode is a scrubbing toggle, ' +
+      'not the vacuum/mop selector, and merely sending it triggers a mop-pad wash at the Omni station.',
     cleanCommand: 'Clean_V2',
     spotAreaStrategy: 'freeClean',
-    supportsMopping: true,
-    skipSweepModeOnVacuumOnly: true,
+    cleanTypeStrategy: 'workMode',
     cleanStateIsPushOnly: true,
     cleanModes: ['vacuum', 'mop', 'vacuumAndMop', 'mopAfterVacuum'],
     cleanSpeeds: [
@@ -50,7 +50,7 @@ export const DEFAULT_MODEL: ModelDefinition = {
   notes: 'Fallback profile for unrecognised device classes.',
   cleanCommand: 'Clean_V2',
   spotAreaStrategy: 'SpotArea_V2',
-  supportsMopping: false,
+  cleanTypeStrategy: 'none',
   cleanStateIsPushOnly: false,
   cleanModes: ['vacuum'],
   cleanSpeeds: [

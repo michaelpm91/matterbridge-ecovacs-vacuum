@@ -51,8 +51,8 @@ change credentials/country.
 
 - The log prefix is the package.json `description` — keep it short.
 - Real-credential runs open an MQTT session; the plugin appends `-mb` to the
-  client ID so it won't kick a production instance on a *different* host, but
-  two instances on the *same* host with the same suffix will fight.
+  client ID so it won't kick a production instance on a _different_ host, but
+  two instances on the _same_ host with the same suffix will fight.
 - Credential-less verification is still meaningful: it covers the whole
   Matterbridge↔plugin seam that the mocked tests cannot.
 

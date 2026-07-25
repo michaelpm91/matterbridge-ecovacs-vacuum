@@ -61,7 +61,7 @@ The Ecovacs cloud API is inconsistent across robot generations — commands one 
 
 - which clean command the firmware accepts (`Clean` vs `Clean_V2`)
 - how room cleans are started (`SpotArea`, `SpotArea_V2`, or the X2's `freeClean`)
-- whether the robot has controllable mopping, and quirks like _"never send `DisableSweepMode` on vacuum-only runs"_ (which triggers a spurious mop-pad wash on all-in-one stations)
+- how the cleaning type is selected (`setWorkMode` on X1/X2-generation robots — pinned before every clean so state left by the Ecovacs app can't leak into a run; note that `setSweepMode` is _not_ the vacuum/mop selector, and merely sending it triggers a mop-pad wash on Omni stations)
 - whether clean state can be polled or is push-only
 - which clean modes and suction speeds to expose
 

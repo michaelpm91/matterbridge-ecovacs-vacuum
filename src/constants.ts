@@ -130,6 +130,17 @@ export const CLEAN_MODE_NUMBER: Record<CleanModeKey, number> = {
   mopAfterVacuum: 4,
 };
 
+/**
+ * Map cleaning type modes to Ecovacs `setWorkMode` values (X1/X2 generation).
+ * Values verified live on an X2 Omni and against deebot-client's WorkMode enum.
+ */
+export const ECOVACS_WORK_MODE: Record<CleanModeKey, number> = {
+  vacuumAndMop: 0,
+  vacuum: 1,
+  mop: 2,
+  mopAfterVacuum: 3,
+};
+
 /** First Matter mode number used for suction speed entries (10, 11, 12, …). */
 export const SPEED_MODE_BASE = 10;
 

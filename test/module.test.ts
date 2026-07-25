@@ -805,41 +805,45 @@ describe('Matterbridge Ecovacs Plugin', () => {
     expect(mockVacbot.stop).toHaveBeenCalled();
   });
 
-  it('should start a Vacuum clean (default clean mode, no setSweepMode)', async () => {
+  it('should start a Vacuum clean (setWorkMode 1, never setSweepMode)', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 1 }, 'rvcCleanMode');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    // Vacuum-only must NOT send DisableSweepMode — doing so triggers the X2 station
-    // mop pad wash cycle even for vacuum-only runs (skipSweepModeOnVacuumOnly).
-    expect(mockVacbot.run).not.toHaveBeenCalledWith('DisableSweepMode');
+    // Work mode is pinned before every clean so state left by the Ecovacs app
+    // (e.g. mopping enabled) can never leak into a HomeKit-initiated run.
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
+    // setSweepMode is a scrubbing toggle whose mere invocation triggers a mop-pad
+    // wash at the Omni station — the plugin must never send it.
+    expect(mockVacbot.run).not.toHaveBeenCalledWith('DisableSweepMode');
+    expect(mockVacbot.run).not.toHaveBeenCalledWith('EnableSweepMode');
   });
 
-  it('should start a Mop clean (EnableSweepMode + Clean_V2)', async () => {
+  it('should start a Mop clean (setWorkMode 2 + Clean_V2)', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcCleanMode');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    expect(mockVacbot.run).toHaveBeenCalledWith('EnableSweepMode');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 2 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
   });
 
-  it('should start a Vacuum & Mop simultaneous clean', async () => {
+  it('should start a Vacuum & Mop simultaneous clean (setWorkMode 0)', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 3 }, 'rvcCleanMode');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    expect(mockVacbot.run).toHaveBeenCalledWith('DisableSweepMode');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 0 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
   });
 
-  it('should start a Mop after Vacuum (sequential) clean', async () => {
+  it('should start a Mop after Vacuum (sequential) clean (setWorkMode 3)', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 4 }, 'rvcCleanMode');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    expect(mockVacbot.run).toHaveBeenCalledWith('DisableSweepMode');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 3 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
   });
 
@@ -849,7 +853,8 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // Select areas 1 and 2 (mapped to Ecovacs IDs '0' and '1')
     await rvc.executeCommandHandler('selectAreas', { newAreas: [1, 2] }, 'serviceArea');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    // Vacuum-only (default clean mode): no setSweepMode — omitting it skips the mop wash.
+    // Vacuum-only: work mode pinned to 1, and setSweepMode never sent (pad-wash trigger).
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
     expect(mockVacbot.run).not.toHaveBeenCalledWith('DisableSweepMode');
     // Areas 1,2 (Matter IDs) map to Ecovacs IDs '0','1'; freeClean value = "1,0;1,1"
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', {
@@ -860,23 +865,23 @@ describe('Matterbridge Ecovacs Plugin', () => {
     });
   });
 
-  it('should enable sweep mode for Mop spot area clean', async () => {
+  it('should set mop work mode for Mop spot area clean', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcCleanMode'); // Mop
     await rvc.executeCommandHandler('selectAreas', { newAreas: [1] }, 'serviceArea');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    expect(mockVacbot.run).toHaveBeenCalledWith('EnableSweepMode');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 2 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', expect.objectContaining({ act: 'start' }));
   });
 
-  it('should disable mop-only mode for VacuumAndMop spot area clean', async () => {
+  it('should set combined work mode for VacuumAndMop spot area clean', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 3 }, 'rvcCleanMode'); // VacuumAndMop
     await rvc.executeCommandHandler('selectAreas', { newAreas: [1] }, 'serviceArea');
     await rvc.executeCommandHandler('changeToMode', { newMode: 2 }, 'rvcRunMode');
-    expect(mockVacbot.run).toHaveBeenCalledWith('DisableSweepMode');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 0 });
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', expect.objectContaining({ act: 'start' }));
   });
 
@@ -1078,13 +1083,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
       return d;
     };
 
-    it('uses SpotArea_V2 for room cleans on the default profile (no sweep mode: mopping unsupported)', () => {
+    it('uses SpotArea_V2 for room cleans on the default profile (no work-mode command sent)', () => {
       const d = makeDevice(DEFAULT_MODEL);
       d.selectedAreaIds = [1, 2];
       d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('SpotArea_V2', '0,1', 1);
-      expect(mockVacbot.run).not.toHaveBeenCalledWith('EnableSweepMode');
-      expect(mockVacbot.run).not.toHaveBeenCalledWith('DisableSweepMode');
+      expect(mockVacbot.run).not.toHaveBeenCalledWith('Generic', 'setWorkMode', expect.anything());
     });
 
     it('polls GetCleanState on models where clean state is not push-only', () => {
@@ -1093,18 +1097,17 @@ describe('Matterbridge Ecovacs Plugin', () => {
       expect(mockVacbot.run).toHaveBeenCalledWith('GetCleanState');
     });
 
-    it('uses the legacy SpotArea command and sends DisableSweepMode on vacuum-only when not skipped', () => {
+    it('uses the legacy SpotArea command and pins the work mode when the model declares workMode', () => {
       const d = makeDevice({
         ...DEFAULT_MODEL,
         cleanCommand: 'Clean',
         spotAreaStrategy: 'SpotArea',
-        supportsMopping: true,
-        skipSweepModeOnVacuumOnly: false,
+        cleanTypeStrategy: 'workMode',
         cleanModes: ['vacuum', 'mop'],
       });
       d.selectedAreaIds = [1, 2];
       d.startClean();
-      expect(mockVacbot.run).toHaveBeenCalledWith('DisableSweepMode');
+      expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
       expect(mockVacbot.run).toHaveBeenCalledWith('SpotArea', 'start', '0,1');
 
       // Full clean uses the legacy Clean command
@@ -1113,11 +1116,11 @@ describe('Matterbridge Ecovacs Plugin', () => {
       d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Clean');
 
-      // Mop mode enables mop-only sweep mode
+      // Mop mode pins work mode 2
       jest.clearAllMocks();
       d.currentCleanMode = 2; // mop
       d.startClean();
-      expect(mockVacbot.run).toHaveBeenCalledWith('EnableSweepMode');
+      expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 2 });
     });
 
     it('ignores selected areas and starts a full clean when spotAreaStrategy is none', () => {
