@@ -40,6 +40,15 @@ change credentials/country.
 
 ## Gotchas
 
+- Since ~2026-07-14 Ecovacs requires one-time email verification per client
+  device ID; unverified IDs fail login with error 1013 "Please update to the
+  latest version" (misleading — version strings are irrelevant). Fix with
+  `node scripts/verify-device.mjs <email> <password> [country] [continent]`
+  (add `--plugin` for the plugin's device ID). Device IDs derive from
+  `os.hostname()`, so a hostname change re-triggers 1013.
+- Fake/nonexistent accounts do NOT trip the 1013 gate (nothing to verify), so
+  bogus-credential probes still exercise the login path and return 1010.
+
 - The log prefix is the package.json `description` — keep it short.
 - Real-credential runs open an MQTT session; the plugin appends `-mb` to the
   client ID so it won't kick a production instance on a *different* host, but

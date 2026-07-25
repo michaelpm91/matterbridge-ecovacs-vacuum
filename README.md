@@ -44,6 +44,17 @@ Configure through the Matterbridge frontend:
 
 > `gb` is automatically mapped to the non-standard `UK` code the Ecovacs API expects.
 
+### Login fails with error 1013 ("Please update to the latest version")
+
+Since mid-July 2026 Ecovacs requires every API client device ID to complete a **one-time email verification**; unverified device IDs get error 1013 (the message about updating is misleading — no version change fixes it). Run the bundled verification script once per device ID:
+
+```bash
+node scripts/verify-device.mjs <email> <password> [country] [continent] --plugin   # the plugin's device ID
+node scripts/verify-device.mjs <email> <password> [country] [continent]            # the debug scripts' device ID
+```
+
+Ecovacs emails a code to your account address; enter it at the prompt and the script confirms with a normal login. Verification sticks — you only need to redo it if the machine's hostname changes (the device ID is derived from it).
+
 ## Adding support for a new model
 
 The Ecovacs cloud API is inconsistent across robot generations — commands one model accepts are silently ignored or rejected by another. All model-specific behaviour therefore lives in a single declarative registry: [`src/models/models.ts`](src/models/models.ts), keyed by the Ecovacs device class. A model entry declares things like:

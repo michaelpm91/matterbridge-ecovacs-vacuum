@@ -80,14 +80,19 @@ console.log('\n[debug] Connecting to Ecovacs cloud...');
 try {
   await api.connect(username, passwordHash);
   console.log('[debug] ✓ Authenticated successfully');
-  log('uid', api.uid);
-  log('resource', api.resource);
-  log('user_access_token', api.user_access_token ? '(present)' : '(MISSING)');
 } catch (err) {
   console.error('[debug] ✗ Authentication failed:', err.message ?? err);
-  console.error('[debug] Full error:', err);
+  if (/1013/.test(String(err.message ?? err))) {
+    // Ecovacs requires a one-time email verification per client device ID since ~2026-07-14.
+    console.error('[debug]   Error 1013 means this device ID has not completed Ecovacs device verification.');
+    console.error('[debug]   Run: node scripts/verify-device.mjs <username> <password> [country] [continent]');
+  }
   process.exit(1);
 }
+
+log('uid', api.uid);
+log('resource', api.resource);
+log('user_access_token', api.user_access_token ? '(present)' : '(MISSING)');
 
 // ── List devices ──────────────────────────────────────────────────────────────
 

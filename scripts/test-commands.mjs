@@ -76,6 +76,10 @@ try {
   console.log('[test] ✓ Authenticated');
 } catch (err) {
   console.error('[test] ✗ Auth failed:', err.message ?? err);
+  if (/1013/.test(String(err.message ?? err))) {
+    // Ecovacs requires a one-time email verification per client device ID since ~2026-07-14.
+    console.error('[test]   Error 1013: run `node scripts/verify-device.mjs` first to verify this device ID.');
+  }
   process.exit(1);
 }
 
