@@ -53,7 +53,7 @@ node scripts/verify-device.mjs <email> <password> [country] [continent] --plugin
 node scripts/verify-device.mjs <email> <password> [country] [continent]            # the debug scripts' device ID
 ```
 
-Ecovacs emails a code to your account address; enter it at the prompt and the script confirms with a normal login. Verification sticks — you only need to redo it if the machine's hostname changes (the device ID is derived from it).
+Ecovacs emails a code to your account address; enter it at the prompt and the script confirms with a normal login. Verification generally sticks, but Ecovacs can demand it again — observed after many logins from the same device ID in a short window, and a hostname change (the device ID is derived from it) always requires re-verification.
 
 ## Adding support for a new model
 

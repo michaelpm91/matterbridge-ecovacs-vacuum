@@ -45,7 +45,8 @@ change credentials/country.
   latest version" (misleading — version strings are irrelevant). Fix with
   `node scripts/verify-device.mjs <email> <password> [country] [continent]`
   (add `--plugin` for the plugin's device ID). Device IDs derive from
-  `os.hostname()`, so a hostname change re-triggers 1013.
+  `os.hostname()`, so a hostname change re-triggers 1013. Verification can
+  also be re-demanded after many logins from one device ID in a short window.
 - Fake/nonexistent accounts do NOT trip the 1013 gate (nothing to verify), so
   bogus-credential probes still exercise the login path and return 1010.
 
