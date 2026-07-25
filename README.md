@@ -10,7 +10,7 @@
 - **Suction speed** — Quiet / Automatic / Quick / Deep Clean via the Apple Home speed picker
 - **Battery level and charging state**, including full-charge detection
 - **Error reporting** mapped to Matter RVC operational errors (dust bin, water tanks, stuck, …)
-- **Automatic reconnect** when the Ecovacs cloud connection drops
+- **Automatic reconnect** when the Ecovacs cloud connection drops, and **session caching** across restarts (fewer logins — less likely to re-trigger Ecovacs device verification)
 - Bridges **every robot on your Ecovacs account**
 
 ## Supported models

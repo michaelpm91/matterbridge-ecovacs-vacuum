@@ -26,6 +26,29 @@ export interface EcovacsPlatformConfig extends PlatformConfig {
   continent: string;
 }
 
+/**
+ * Cached Ecovacs cloud session, persisted in the plugin's node storage.
+ * Reusing the access token across Matterbridge restarts avoids a fresh login
+ * every start — Ecovacs re-triggers device verification (error 1013) when it
+ * sees too many logins from one device ID. The token is as sensitive as the
+ * password already stored in the plugin config; both live in the same
+ * Matterbridge storage directory.
+ */
+interface CachedSession {
+  uid: string;
+  token: string;
+  /** Epoch ms after which the cached token is no longer trusted. */
+  expiresAt: number;
+  /** Hash of username|country|deviceId — invalidates the cache when any of them change. */
+  fingerprint: string;
+}
+
+/** Storage key for the cached Ecovacs session. */
+const SESSION_KEY = 'ecovacsSession';
+
+/** Trust cached tokens for 6.5 days — Ecovacs tokens are valid for ~7. */
+const SESSION_TTL_MS = 6.5 * 24 * 60 * 60 * 1000;
+
 /** Matterbridge Dynamic Platform bridging Ecovacs robot vacuums (Deebot, yeedi) to Matter. */
 export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
   /** Bridged robots keyed by Ecovacs device ID (did). */
@@ -135,11 +158,37 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
         ),
       ]);
 
-    this.log.debug('Connecting to Ecovacs cloud...');
-    await timeout(api.connect(cfg.username, EcoVacsAPI.md5(cfg.password)), 'Ecovacs auth');
-    this.log.info('Ecovacs cloud connection established');
+    const fingerprint = EcoVacsAPI.md5(`${cfg.username}|${ecovacsCountry}|${deviceId}`);
+    let vacuums: EcovacsVacuum[] | null = null;
 
-    const vacuums: EcovacsVacuum[] = await timeout(api.devices(), 'Ecovacs device list');
+    // Try the cached session first: inject uid/token and validate them with a
+    // real API call. Any rejection falls through to a full login.
+    const cached = await this.context?.get<CachedSession | undefined>(SESSION_KEY, undefined);
+    if (cached && cached.fingerprint === fingerprint && cached.expiresAt > Date.now()) {
+      api.uid = cached.uid;
+      api.user_access_token = cached.token;
+      try {
+        vacuums = await timeout(api.devices(), 'Ecovacs device list');
+        this.log.info('Reusing cached Ecovacs session (no fresh login needed)');
+      } catch (err: unknown) {
+        this.log.info(`Cached Ecovacs session rejected (${err instanceof Error ? err.message : String(err)}) — performing full login`);
+        vacuums = null;
+      }
+    }
+
+    if (!vacuums) {
+      this.log.debug('Connecting to Ecovacs cloud...');
+      await timeout(api.connect(cfg.username, EcoVacsAPI.md5(cfg.password)), 'Ecovacs auth');
+      this.log.info('Ecovacs cloud connection established');
+      await this.context?.set<CachedSession>(SESSION_KEY, {
+        uid: api.uid,
+        token: api.user_access_token,
+        expiresAt: Date.now() + SESSION_TTL_MS,
+        fingerprint,
+      });
+      vacuums = await timeout(api.devices(), 'Ecovacs device list');
+    }
+
     if (!vacuums || vacuums.length === 0) {
       this.log.error('No Ecovacs devices found on this account.');
       return;

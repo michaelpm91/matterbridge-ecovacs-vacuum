@@ -139,6 +139,18 @@ const mockConfig: PlatformConfig = {
 
 const loggerLogSpy = jest.spyOn(AnsiLogger.prototype, 'log').mockImplementation((level: string, message: string, ...parameters: any[]) => {});
 
+// Deterministic replacement for the platform's NodeStorage context — the real one
+// persists to disk (jest/EcovacsPlugin) and would leak cached sessions across runs.
+const mockContext = {
+  get: jest.fn<any>().mockResolvedValue(undefined),
+  set: jest.fn<any>().mockResolvedValue(undefined),
+  remove: jest.fn<any>().mockResolvedValue(undefined),
+  close: jest.fn<any>().mockResolvedValue(undefined), // called by the base class during onShutdown
+};
+
+// Fingerprint the platform computes for the mock config/device: md5 of username|country|deviceId
+const SESSION_FINGERPRINT = 'md5(test@example.com|DE|device-id)';
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('Matterbridge Ecovacs Plugin', () => {
@@ -165,7 +177,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
     MockEcoVacsAPI.mockImplementation(() => mockApi);
     MockEcoVacsAPI.getDeviceId.mockReturnValue('device-id');
     MockEcoVacsAPI.md5.mockImplementation((s: string) => `md5(${s})`);
-    mockApi.connect.mockResolvedValue(undefined);
+    // Like the real library, a successful connect() populates the session fields
+    // (the cached-session path may have overwritten them with cached values first)
+    mockApi.connect.mockImplementation(async () => {
+      mockApi.uid = 'test-uid';
+      mockApi.user_access_token = 'test-token';
+    });
     mockApi.devices.mockResolvedValue([mockVacuumRecord]);
     mockApi.getVacBot.mockReturnValue(mockVacbot);
     mockMqttClient.on.mockImplementation((event: string, cb: (...args: unknown[]) => void) => {
@@ -189,6 +206,13 @@ describe('Matterbridge Ecovacs Plugin', () => {
       }
     });
     mockVacbot.disconnectAsync.mockResolvedValue(undefined);
+    mockContext.get.mockResolvedValue(undefined);
+    mockContext.set.mockResolvedValue(undefined);
+    // Restore shared mock API session fields (mutated by the cached-session path)
+    mockApi.uid = 'test-uid';
+    mockApi.user_access_token = 'test-token';
+    // Replace the platform's real on-disk storage context with the deterministic mock
+    if (instance) (instance as any).context = mockContext;
   });
 
   afterEach(() => {
@@ -301,6 +325,76 @@ describe('Matterbridge Ecovacs Plugin', () => {
     expect(mockVacbot.connect).toHaveBeenCalled();
     await instance.onStart();
     expect(mockLog.info).toHaveBeenCalledWith('onStart called with reason: none');
+  });
+
+  // ── Session caching ───────────────────────────────────────────────────────
+
+  it('should save the session to storage after a fresh login', async () => {
+    await instance.onStart('cache-save-test');
+    expect(mockApi.connect).toHaveBeenCalled();
+    expect(mockContext.set).toHaveBeenCalledWith(
+      'ecovacsSession',
+      expect.objectContaining({
+        uid: 'test-uid',
+        token: 'test-token',
+        fingerprint: SESSION_FINGERPRINT,
+        expiresAt: expect.any(Number),
+      }),
+    );
+  });
+
+  it('should reuse a valid cached session without logging in', async () => {
+    mockContext.get.mockResolvedValue({
+      uid: 'cached-uid',
+      token: 'cached-token',
+      expiresAt: Date.now() + 60_000,
+      fingerprint: SESSION_FINGERPRINT,
+    });
+    await instance.onStart('cache-hit-test');
+    expect(mockApi.connect).not.toHaveBeenCalled();
+    expect(mockApi.uid).toBe('cached-uid');
+    expect(mockApi.user_access_token).toBe('cached-token');
+    expect(mockLog.info).toHaveBeenCalledWith('Reusing cached Ecovacs session (no fresh login needed)');
+    // No fresh login → the stored session must not be overwritten
+    expect(mockContext.set).not.toHaveBeenCalled();
+  });
+
+  it('should fall back to a full login when the cached session is rejected', async () => {
+    mockContext.get.mockResolvedValue({
+      uid: 'cached-uid',
+      token: 'revoked-token',
+      expiresAt: Date.now() + 60_000,
+      fingerprint: SESSION_FINGERPRINT,
+    });
+    mockApi.devices.mockRejectedValueOnce(new Error('auth error 3'));
+    await instance.onStart('cache-rejected-test');
+    expect(mockLog.info).toHaveBeenCalledWith(expect.stringContaining('Cached Ecovacs session rejected'));
+    expect(mockApi.connect).toHaveBeenCalled();
+    expect(mockContext.set).toHaveBeenCalledWith('ecovacsSession', expect.objectContaining({ uid: 'test-uid' }));
+  });
+
+  it('should ignore expired or mismatched cached sessions', async () => {
+    // Expired
+    mockContext.get.mockResolvedValue({
+      uid: 'cached-uid',
+      token: 'cached-token',
+      expiresAt: Date.now() - 1,
+      fingerprint: SESSION_FINGERPRINT,
+    });
+    await instance.onStart('cache-expired-test');
+    expect(mockApi.connect).toHaveBeenCalledTimes(1);
+
+    // Fingerprint mismatch (different account/country/device)
+    jest.clearAllMocks();
+    mockApi.devices.mockResolvedValue([mockVacuumRecord]);
+    mockContext.get.mockResolvedValue({
+      uid: 'cached-uid',
+      token: 'cached-token',
+      expiresAt: Date.now() + 60_000,
+      fingerprint: 'md5(someone-else@example.com|DE|device-id)',
+    });
+    await instance.onStart('cache-mismatch-test');
+    expect(mockApi.connect).toHaveBeenCalledTimes(1);
   });
 
   it('should warn and fall back to the default profile for an unknown device class', async () => {

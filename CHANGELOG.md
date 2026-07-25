@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Ecovacs session caching: the access token is persisted in the plugin storage and reused across Matterbridge restarts (~6.5-day trust window, validated against the API on start, invalidated when the account, country, or hostname changes). Avoids a fresh login every restart — Ecovacs re-triggers device verification (error 1013) when it sees too many logins from one device ID.
 - `scripts/verify-device.mjs` — one-time Ecovacs device verification (login error 1013). Since ~2026-07-14 Ecovacs requires each API client device ID to complete an email verification once; this ports the flow from DeebotUniverse/client.py PR #1706.
 - Work-mode and sweep-mode commands in the interactive test console (`wm`, `wm0`–`wm3`, `sm0`, `sm1`) and a `--device N` selector in both debug scripts.
 
