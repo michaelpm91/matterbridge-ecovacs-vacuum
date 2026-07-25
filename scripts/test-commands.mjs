@@ -207,6 +207,10 @@ function showMenu() {
   console.log('  cs<id>  SpotArea_V2              e.g. cs0 cs15  ← standard 950-type strategy');
   console.log('          (compare both to find out what a new model accepts)');
   console.log('');
+  console.log(' Mop control (check current state with "s" → WaterInfo sweepType)');
+  console.log('  sm0     DisableSweepMode (combined mode — note: may trigger a pad wash on Omni stations)');
+  console.log('  sm1     EnableSweepMode  (mop-only mode)');
+  console.log('');
   console.log(' Control');
   console.log('  p       Pause');
   console.log('  x       Resume');
@@ -277,6 +281,12 @@ rl.on('line', (line) => {
     // Standard 950-type V2 spot area command. Rejected by X2 firmware (body.code=20011).
     console.log(`[test] → SpotArea_V2('${areaId}', 1)`);
     vacbot.run('SpotArea_V2', areaId, 1);
+  } else if (cmd === 'sm0') {
+    console.log('[test] → DisableSweepMode (setSweepMode 0 — combined mode)');
+    vacbot.run('DisableSweepMode');
+  } else if (cmd === 'sm1') {
+    console.log('[test] → EnableSweepMode (setSweepMode 1 — mop-only mode)');
+    vacbot.run('EnableSweepMode');
   } else if (cmd === 'p') {
     console.log('[test] → pause()');
     vacbot.pause();
