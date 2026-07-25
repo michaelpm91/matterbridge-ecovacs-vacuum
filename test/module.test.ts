@@ -756,8 +756,10 @@ describe('Matterbridge Ecovacs Plugin', () => {
     await rvc.executeCommandHandler('goHome', undefined, 'rvcOperationalState');
     expect(mockVacbot.pause).toHaveBeenCalled();
     expect(mockVacbot.resume).toHaveBeenCalled();
-    // goHome must NOT call stop() before charge() — stop() marks the task as "paused"
-    // in the Ecovacs app. Charge is accepted from any state.
+    // goHome ends the job with the V2 stop before docking — charge() alone only
+    // pauses an active V2 job, leaving it "paused" in the Ecovacs app forever.
+    // The library's non-V2 stop() is never used on V2 firmware (it is ignored).
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
     expect(mockVacbot.stop).not.toHaveBeenCalled();
     expect(mockVacbot.charge).toHaveBeenCalled();
   });
@@ -798,11 +800,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
     expect(mockLog.info).toHaveBeenCalledWith('Matter command: selectAreas → [1, 2]');
   });
 
-  it('should stop the vacbot when RunMode is set to Idle', async () => {
+  it('should stop the job with the V2 stop when RunMode is set to Idle', async () => {
     const rvc = device().rvc;
     device().vacbot = mockVacbot;
     await rvc.executeCommandHandler('changeToMode', { newMode: 1 }, 'rvcRunMode');
-    expect(mockVacbot.stop).toHaveBeenCalled();
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
+    expect(mockVacbot.stop).not.toHaveBeenCalled();
   });
 
   it('should start a Vacuum clean (setWorkMode 1, never setSweepMode)', async () => {
@@ -1121,6 +1124,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
       d.currentCleanMode = 2; // mop
       d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 2 });
+
+      // Legacy (non-V2) robots stop with the library's stop()
+      jest.clearAllMocks();
+      d.stopClean();
+      expect(mockVacbot.stop).toHaveBeenCalled();
+      expect(mockVacbot.run).not.toHaveBeenCalledWith('Generic', 'clean_V2', expect.anything());
     });
 
     it('ignores selected areas and starts a full clean when spotAreaStrategy is none', () => {

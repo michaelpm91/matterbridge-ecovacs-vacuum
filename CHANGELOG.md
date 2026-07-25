@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `goHome` and RunMode Idle now end the job with the V2 stop (`clean_V2` act=stop) before docking. The library's non-V2 `stop()` is ignored by V2 firmware, so jobs interrupted by "send home" stayed "paused" in the Ecovacs app forever (verified live on the X2).
+
 - Cleaning type (Vacuum / Mop / Vacuum & Mop / Mop after Vacuum) is now selected with `setWorkMode`, pinned before every clean. Verified live on an X2 Omni: the previously used `setSweepMode` is a scrubbing-style toggle, not the vacuum/mop selector — a "vacuum-only" clean could mop the floor if the Ecovacs app had left mopping enabled, and merely sending `setSweepMode` triggered a mop-pad wash at the station. Model definitions now declare `cleanTypeStrategy: 'workMode' | 'none'` (replaces `supportsMopping`/`skipSweepModeOnVacuumOnly`).
 
 ### Added

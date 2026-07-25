@@ -223,7 +223,8 @@ function showMenu() {
   console.log('  p       Pause');
   console.log('  x       Resume');
   console.log('  h       Go home (dock)');
-  console.log('  0       Stop');
+  console.log('  0       Stop (library stop — non-V2 `clean`, ignored by X2 firmware)');
+  console.log('  0v      Stop V2 (`clean_V2` act=stop — properly ends the job on X2)');
   console.log('');
   console.log('  ?       Show this menu');
   console.log('  q       Quit');
@@ -313,8 +314,11 @@ rl.on('line', (line) => {
     console.log('[test] → charge() (go home)');
     vacbot.charge();
   } else if (cmd === '0') {
-    console.log('[test] → stop()');
+    console.log('[test] → stop() (non-V2 clean act=stop — X2 ignores this)');
     vacbot.stop();
+  } else if (cmd === '0v') {
+    console.log("[test] → clean_V2 {act:'stop'} (V2 stop — ends the current job)");
+    vacbot.run('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
   } else if (cmd === '?') {
     showMenu();
   } else if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {

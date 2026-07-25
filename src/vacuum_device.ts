@@ -520,9 +520,14 @@ export class VacuumDevice {
       this.log.info('Matter command: goHome');
       this.isRobotPaused = false;
       this.resumePending = false;
-      // Send charge() directly — stop() before charge() marks the task as "paused"
-      // in the Ecovacs app. Charge is accepted from any state (cleaning or paused).
-      this.vacbot?.charge();
+      // End the job before docking: charge() alone only pauses an active V2 job,
+      // leaving it "paused" in the Ecovacs app forever. (Verified live on the X2 —
+      // the old advice to avoid stop-before-charge was based on the non-V2 stop,
+      // which V2 firmware ignores; the pausing was caused by charge() itself.)
+      if (this.vacbot) {
+        this.stopClean();
+        this.vacbot.charge();
+      }
     });
 
     // identify — mandatory Matter cluster; Ecovacs robots have no identify function so just log
@@ -540,7 +545,7 @@ export class VacuumDevice {
       if (cluster.toLowerCase().includes('runmode') || cluster.toLowerCase().includes('run_mode')) {
         this.log.info(`Matter command: changeToMode (RunMode) → ${newMode}`);
         if (newMode === RUN_MODE.Idle) {
-          this.vacbot?.stop();
+          if (this.vacbot) this.stopClean();
         } else if (this.isRobotPaused) {
           // HomeKit sends SpotCleaning(4) as a resume-after-pause signal; honour it.
           this.log.info('Resuming paused clean');
@@ -581,6 +586,22 @@ export class VacuumDevice {
    * scrubbing-style toggle, not the vacuum/mop selector) triggers a mop-pad
    * wash merely by being sent.
    */
+  /**
+   * Stop the current cleaning job with the command variant the firmware accepts.
+   * V2-generation robots ignore the library's non-V2 stop (`clean` act=stop);
+   * they need `clean_V2` act=stop — verified live on the X2, which answers with
+   * a CleanReport: idle push and ends the job in the Ecovacs app.
+   */
+  private stopClean(): void {
+    if (this.definition.cleanCommand === 'Clean_V2') {
+      this.log.info('Stopping clean (clean_V2 act=stop)');
+      this.vacbot.run('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
+    } else {
+      this.log.info('Stopping clean (stop)');
+      this.vacbot.stop();
+    }
+  }
+
   private applyWorkMode(): void {
     if (this.definition.cleanTypeStrategy !== 'workMode') return;
     const key = (Object.keys(CLEAN_MODE_NUMBER) as CleanModeKey[]).find((k) => CLEAN_MODE_NUMBER[k] === this.currentCleanMode) ?? 'vacuum';
