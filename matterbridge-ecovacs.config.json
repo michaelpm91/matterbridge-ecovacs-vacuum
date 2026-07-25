@@ -1,0 +1,10 @@
+{
+  "name": "matterbridge-ecovacs",
+  "type": "DynamicPlatform",
+  "username": "",
+  "password": "",
+  "country": "de",
+  "continent": "eu",
+  "debug": false,
+  "unregisterOnShutdown": false
+}

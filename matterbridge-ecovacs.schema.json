@@ -1,0 +1,55 @@
+{
+  "title": "Matterbridge Ecovacs Plugin",
+  "description": "Expose Ecovacs robot vacuums (Deebot, yeedi) as Matter RVC devices",
+  "type": "object",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "description": "Plugin name",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "type": {
+      "title": "Type",
+      "description": "Plugin type",
+      "type": "string",
+      "readOnly": true,
+      "ui:widget": "hidden"
+    },
+    "username": {
+      "title": "Ecovacs Username",
+      "description": "Your Ecovacs account email",
+      "type": "string"
+    },
+    "password": {
+      "title": "Ecovacs Password",
+      "type": "string",
+      "format": "password"
+    },
+    "country": {
+      "title": "Country Code",
+      "description": "ISO alpha-2 country code of your Ecovacs account, e.g. us, de, gb",
+      "type": "string",
+      "default": "de"
+    },
+    "continent": {
+      "title": "Continent",
+      "description": "Ecovacs continent code: na, eu, or as",
+      "type": "string",
+      "default": "eu"
+    },
+    "debug": {
+      "title": "Debug",
+      "description": "Enable debug mode for the plugin. Only for debugging purposes, not recommended for production use.",
+      "type": "boolean",
+      "default": false
+    },
+    "unregisterOnShutdown": {
+      "title": "Unregister",
+      "description": "Unregister all devices on shutdown. Only for debugging purposes, not recommended for production use.",
+      "type": "boolean",
+      "default": false
+    }
+  }
+}
