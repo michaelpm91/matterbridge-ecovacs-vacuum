@@ -46,14 +46,31 @@ Configure through the Matterbridge frontend:
 
 ### Login fails with error 1013 ("Please update to the latest version")
 
-Since mid-July 2026 Ecovacs requires every API client device ID to complete a **one-time email verification**; unverified device IDs get error 1013 (the message about updating is misleading — no version change fixes it). Run the bundled verification script once per device ID:
+Since mid-July 2026 Ecovacs requires every API client **device ID** to complete a **one-time email verification**; unverified device IDs get error 1013 (the message about updating is misleading — no version change fixes it).
 
-```bash
-node scripts/verify-device.mjs <email> <password> [country] [continent] --plugin   # the plugin's device ID
-node scripts/verify-device.mjs <email> <password> [country] [continent]            # the debug scripts' device ID
+The plugin logs the device ID it uses on every start:
+
+```
+Generated Ecovacs device ID: b03d846d… (from hostname 'homeassistant', now persisted)
 ```
 
-Ecovacs emails a code to your account address; enter it at the prompt and the script confirms with a normal login. Verification generally sticks, but Ecovacs can demand it again — observed after many logins from the same device ID in a short window, and a hostname change (the device ID is derived from it) always requires re-verification.
+Verify that ID once, then restart the plugin:
+
+```bash
+npx matterbridge-ecovacs-verify <email> <password> <country> <continent> --device-id <the logged id>
+```
+
+Ecovacs emails a code to your account address; enter it at the prompt and the command confirms with a real login.
+
+**The verification does not have to run on the Matterbridge host.** This matters when Matterbridge runs somewhere without a convenient shell (a Home Assistant VM, a container): read the device ID from the plugin log, verify it from your laptop, then paste it into the plugin's `deviceId` config field so the ID stays pinned to the verified one.
+
+The plugin persists a generated device ID, so restarts and hostname changes won't silently invalidate your verification. Ecovacs may still demand re-verification occasionally — it was observed after many logins from one device ID in a short window (which is why the plugin caches its session; see below).
+
+For the repo's debug scripts (they use their own device ID derived from the bare hostname):
+
+```bash
+node scripts/verify-device.mjs <email> <password> [country] [continent]
+```
 
 ## Adding support for a new model
 

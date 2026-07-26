@@ -5,6 +5,7 @@
   "password": "",
   "country": "de",
   "continent": "eu",
+  "deviceId": "",
   "debug": false,
   "unregisterOnShutdown": false
 }

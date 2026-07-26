@@ -24,6 +24,14 @@ export interface EcovacsPlatformConfig extends PlatformConfig {
   password: string;
   country: string;
   continent: string;
+  /**
+   * Ecovacs client device ID. Optional — when empty the plugin derives one from
+   * the hostname on first start and persists it. Set explicitly to reuse a
+   * device ID that has already passed Ecovacs device verification (see the
+   * `verify-device` CLI), which is what makes it possible to run the
+   * verification on a machine other than the Matterbridge host.
+   */
+  deviceId?: string;
 }
 
 /**
@@ -45,6 +53,9 @@ interface CachedSession {
 
 /** Storage key for the cached Ecovacs session. */
 const SESSION_KEY = 'ecovacsSession';
+
+/** Storage key for the persisted Ecovacs client device ID. */
+const DEVICE_ID_KEY = 'ecovacsDeviceId';
 
 /** Trust cached tokens for 6.5 days — Ecovacs tokens are valid for ~7. */
 const SESSION_TTL_MS = 6.5 * 24 * 60 * 60 * 1000;
@@ -95,6 +106,18 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.error(`Failed to connect to Ecovacs cloud: ${message}`);
+      if (message.includes('1013')) {
+        // Ecovacs requires a one-time email verification per client device ID.
+        // The message it returns ("please update to the latest version") is misleading.
+        const deviceId = await this.resolveDeviceId(cfg);
+        this.log.error(
+          `This Ecovacs device ID has not completed device verification. Run the verification once, ` +
+            `then restart the plugin:\n` +
+            `    npx matterbridge-ecovacs-verify ${cfg.username} <password> ${cfg.country} ${cfg.continent} --device-id ${deviceId}\n` +
+            `It can be run from any machine (it does not have to be this host) — Ecovacs emails a code to the account address. ` +
+            `Keep the device ID stable afterwards: set "deviceId": "${deviceId}" in the plugin config if you may reinstall or move hosts.`,
+        );
+      }
     }
   }
 
@@ -140,10 +163,7 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
    * @param {EcovacsPlatformConfig} cfg - The platform configuration containing credentials and region.
    */
   private async connectEcovacs(cfg: EcovacsPlatformConfig): Promise<void> {
-    // Append a suffix so the plugin's MQTT client ID differs from the debug
-    // scripts (both use os.hostname()). Identical client IDs cause the MQTT
-    // broker to terminate whichever connected earlier.
-    const deviceId = EcoVacsAPI.getDeviceId(os.hostname() + '-mb');
+    const deviceId = await this.resolveDeviceId(cfg);
     const ecovacsCountry = toEcovacsCountry(cfg.country);
     this.log.debug(`Using Ecovacs country code: ${ecovacsCountry} (from config: ${cfg.country})`);
     const api = new EcoVacsAPI(deviceId, ecovacsCountry, cfg.continent);
@@ -214,6 +234,40 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
 
       device.attach(api, vacuum, () => this.scheduleReconnect(cfg), EcoVacsAPI);
     }
+  }
+
+  /**
+   * Determine the Ecovacs client device ID to authenticate with.
+   *
+   * Precedence: explicit config value → previously persisted value → derived
+   * from the hostname (and then persisted). Persisting matters because Ecovacs
+   * ties device verification to this ID: a value that silently changed (e.g.
+   * because the host was renamed) would fail login with error 1013 until the
+   * verification was repeated.
+   *
+   * @param {EcovacsPlatformConfig} cfg - The platform configuration.
+   * @returns {Promise<string>} The device ID to use.
+   */
+  private async resolveDeviceId(cfg: EcovacsPlatformConfig): Promise<string> {
+    const configured = cfg.deviceId?.trim();
+    if (configured) {
+      this.log.info(`Using Ecovacs device ID from config: ${configured}`);
+      return configured;
+    }
+
+    const stored = await this.context?.get<string | undefined>(DEVICE_ID_KEY, undefined);
+    if (stored) {
+      this.log.info(`Using stored Ecovacs device ID: ${stored}`);
+      return stored;
+    }
+
+    // Suffix the hostname so this ID differs from the one the debug scripts use
+    // (they use the bare hostname): identical MQTT client IDs make the broker
+    // terminate whichever connection was established earlier.
+    const derived = EcoVacsAPI.getDeviceId(os.hostname() + '-mb');
+    await this.context?.set<string>(DEVICE_ID_KEY, derived);
+    this.log.info(`Generated Ecovacs device ID: ${derived} (from hostname '${os.hostname()}', now persisted)`);
+    return derived;
   }
 
   /**

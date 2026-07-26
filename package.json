@@ -1,6 +1,6 @@
 {
   "name": "matterbridge-ecovacs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Matterbridge plugin for Ecovacs robot vacuums (Deebot, yeedi)",
   "author": "michaelpm91 <michaelpm91@googlemail.com>",
   "homepage": "https://github.com/michaelpm91/matterbridge-ecovacs#readme",
@@ -44,6 +44,7 @@
   ],
   "files": [
     "dist",
+    "scripts/verify-device.mjs",
     "npm-shrinkwrap.json",
     "CHANGELOG.md",
     "*.config.json",
@@ -106,5 +107,8 @@
   "overrides": {
     "eslint": "10.0.2",
     "@eslint/js": "10.0.1"
+  },
+  "bin": {
+    "matterbridge-ecovacs-verify": "scripts/verify-device.mjs"
   }
 }

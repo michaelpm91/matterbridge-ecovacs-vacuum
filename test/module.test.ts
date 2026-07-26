@@ -151,6 +151,13 @@ const mockContext = {
 // Fingerprint the platform computes for the mock config/device: md5 of username|country|deviceId
 const SESSION_FINGERPRINT = 'md5(test@example.com|DE|device-id)';
 
+// Point the storage mock at per-key values. The platform reads several keys
+// (device ID, cached session), so a blanket mockResolvedValue would serve the
+// same object for all of them.
+const stubStorage = (values: Record<string, unknown>) => {
+  mockContext.get.mockImplementation(async (key: string, defaultValue?: unknown) => (key in values ? values[key] : defaultValue));
+};
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('Matterbridge Ecovacs Plugin', () => {
@@ -327,6 +334,42 @@ describe('Matterbridge Ecovacs Plugin', () => {
     expect(mockLog.info).toHaveBeenCalledWith('onStart called with reason: none');
   });
 
+  // ── Device ID resolution ──────────────────────────────────────────────────
+
+  it('should generate and persist a device ID derived from the hostname on first start', async () => {
+    await instance.onStart('device-id-generate-test');
+    expect(mockContext.set).toHaveBeenCalledWith('ecovacsDeviceId', 'device-id');
+    expect(mockLog.info).toHaveBeenCalledWith(expect.stringContaining('Generated Ecovacs device ID: device-id'));
+    expect(MockEcoVacsAPI).toHaveBeenCalledWith('device-id', 'DE', 'eu');
+  });
+
+  it('should reuse a persisted device ID instead of re-deriving it', async () => {
+    // A stored ID must win over the hostname so a renamed host does not invalidate
+    // the Ecovacs device verification tied to that ID.
+    stubStorage({ ecovacsDeviceId: 'stored-device-id' });
+    await instance.onStart('device-id-stored-test');
+    expect(mockLog.info).toHaveBeenCalledWith('Using stored Ecovacs device ID: stored-device-id');
+    expect(MockEcoVacsAPI).toHaveBeenCalledWith('stored-device-id', 'DE', 'eu');
+    expect(mockContext.set).not.toHaveBeenCalledWith('ecovacsDeviceId', expect.anything());
+  });
+
+  it('should prefer an explicitly configured device ID', async () => {
+    stubStorage({ ecovacsDeviceId: 'stored-device-id' });
+    (mockConfig as Record<string, unknown>).deviceId = '  configured-device-id  ';
+    await instance.onStart('device-id-config-test');
+    delete (mockConfig as Record<string, unknown>).deviceId;
+    expect(mockLog.info).toHaveBeenCalledWith('Using Ecovacs device ID from config: configured-device-id');
+    expect(MockEcoVacsAPI).toHaveBeenCalledWith('configured-device-id', 'DE', 'eu');
+  });
+
+  it('should log actionable verification instructions on error 1013', async () => {
+    mockApi.connect.mockRejectedValueOnce(new Error('Failure code 1013: Please update to the latest version to continue.'));
+    await instance.onStart('device-verification-test');
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('Failure code 1013'));
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('npx matterbridge-ecovacs-verify'));
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('--device-id device-id'));
+  });
+
   // ── Session caching ───────────────────────────────────────────────────────
 
   it('should save the session to storage after a fresh login', async () => {
@@ -344,11 +387,8 @@ describe('Matterbridge Ecovacs Plugin', () => {
   });
 
   it('should reuse a valid cached session without logging in', async () => {
-    mockContext.get.mockResolvedValue({
-      uid: 'cached-uid',
-      token: 'cached-token',
-      expiresAt: Date.now() + 60_000,
-      fingerprint: SESSION_FINGERPRINT,
+    stubStorage({
+      ecovacsSession: { uid: 'cached-uid', token: 'cached-token', expiresAt: Date.now() + 60_000, fingerprint: SESSION_FINGERPRINT },
     });
     await instance.onStart('cache-hit-test');
     expect(mockApi.connect).not.toHaveBeenCalled();
@@ -356,15 +396,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
     expect(mockApi.user_access_token).toBe('cached-token');
     expect(mockLog.info).toHaveBeenCalledWith('Reusing cached Ecovacs session (no fresh login needed)');
     // No fresh login → the stored session must not be overwritten
-    expect(mockContext.set).not.toHaveBeenCalled();
+    expect(mockContext.set).not.toHaveBeenCalledWith('ecovacsSession', expect.anything());
   });
 
   it('should fall back to a full login when the cached session is rejected', async () => {
-    mockContext.get.mockResolvedValue({
-      uid: 'cached-uid',
-      token: 'revoked-token',
-      expiresAt: Date.now() + 60_000,
-      fingerprint: SESSION_FINGERPRINT,
+    stubStorage({
+      ecovacsSession: { uid: 'cached-uid', token: 'revoked-token', expiresAt: Date.now() + 60_000, fingerprint: SESSION_FINGERPRINT },
     });
     mockApi.devices.mockRejectedValueOnce(new Error('auth error 3'));
     await instance.onStart('cache-rejected-test');
@@ -375,11 +412,8 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
   it('should ignore expired or mismatched cached sessions', async () => {
     // Expired
-    mockContext.get.mockResolvedValue({
-      uid: 'cached-uid',
-      token: 'cached-token',
-      expiresAt: Date.now() - 1,
-      fingerprint: SESSION_FINGERPRINT,
+    stubStorage({
+      ecovacsSession: { uid: 'cached-uid', token: 'cached-token', expiresAt: Date.now() - 1, fingerprint: SESSION_FINGERPRINT },
     });
     await instance.onStart('cache-expired-test');
     expect(mockApi.connect).toHaveBeenCalledTimes(1);
@@ -387,11 +421,8 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // Fingerprint mismatch (different account/country/device)
     jest.clearAllMocks();
     mockApi.devices.mockResolvedValue([mockVacuumRecord]);
-    mockContext.get.mockResolvedValue({
-      uid: 'cached-uid',
-      token: 'cached-token',
-      expiresAt: Date.now() + 60_000,
-      fingerprint: 'md5(someone-else@example.com|DE|device-id)',
+    stubStorage({
+      ecovacsSession: { uid: 'cached-uid', token: 'cached-token', expiresAt: Date.now() + 60_000, fingerprint: 'md5(someone-else@example.com|DE|device-id)' },
     });
     await instance.onStart('cache-mismatch-test');
     expect(mockApi.connect).toHaveBeenCalledTimes(1);

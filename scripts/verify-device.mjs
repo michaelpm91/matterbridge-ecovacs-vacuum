@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /* eslint-disable */
 /**
  * One-time Ecovacs device verification.
@@ -14,13 +15,19 @@
  *   3. user/verifyDevice           → submit the code (account RSA-encrypted)
  *   4. stock login retry           → confirm the device ID is now accepted
  *
- * Usage:
- *   node scripts/verify-device.mjs <username> <password> [country] [continent] [--plugin]
- *   ECOVACS_USERNAME=... ECOVACS_PASSWORD=... node scripts/verify-device.mjs [country] [continent] [--plugin]
+ * Usage (installed):
+ *   npx matterbridge-ecovacs-verify <username> <password> [country] [continent] [--device-id ID]
+ * Usage (from a repo checkout):
+ *   node scripts/verify-device.mjs <username> <password> [country] [continent] [--device-id ID]
+ *   ECOVACS_USERNAME=... ECOVACS_PASSWORD=... node scripts/verify-device.mjs [country] [continent]
  *
  * Targets (each device ID needs its own verification / email code):
- *   default    the device ID used by scripts/debug-ecovacs.mjs and scripts/test-commands.mjs
- *   --plugin   the device ID used by the Matterbridge plugin (hostname + '-mb')
+ *   default          the device ID used by scripts/debug-ecovacs.mjs and scripts/test-commands.mjs
+ *   --plugin         the device ID the Matterbridge plugin derives on THIS host (hostname + '-mb')
+ *   --device-id ID   an explicit device ID — use this to verify on behalf of another
+ *                    machine (e.g. a Home Assistant VM): take the ID the plugin logs
+ *                    at startup, verify it here, then keep it stable by setting
+ *                    "deviceId" in the plugin config.
  */
 
 import crypto from 'node:crypto';
@@ -35,7 +42,9 @@ const { EcoVacsAPI } = require('ecovacs-deebot');
 
 const argv = process.argv.slice(2);
 const forPlugin = argv.includes('--plugin');
-const positional = argv.filter((a) => !a.startsWith('--'));
+const deviceIdFlagIdx = argv.indexOf('--device-id');
+const explicitDeviceId = deviceIdFlagIdx !== -1 ? argv[deviceIdFlagIdx + 1]?.trim() : undefined;
+const positional = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--device-id');
 
 let username = process.env.ECOVACS_USERNAME;
 let rawPassword = process.env.ECOVACS_PASSWORD;
@@ -49,8 +58,13 @@ if (username && rawPassword) {
 }
 
 if (!username || !rawPassword) {
-  console.error('Usage: node scripts/verify-device.mjs <username> <password> [country] [continent] [--plugin]');
-  console.error('   or: ECOVACS_USERNAME=... ECOVACS_PASSWORD=... node scripts/verify-device.mjs [country] [continent] [--plugin]');
+  console.error('Usage: matterbridge-ecovacs-verify <username> <password> [country] [continent] [--device-id ID] [--plugin]');
+  console.error('   or: ECOVACS_USERNAME=... ECOVACS_PASSWORD=... matterbridge-ecovacs-verify [country] [continent]');
+  process.exit(1);
+}
+
+if (deviceIdFlagIdx !== -1 && !explicitDeviceId) {
+  console.error('--device-id requires a value (the device ID the plugin logs at startup)');
   process.exit(1);
 }
 
@@ -61,12 +75,14 @@ const country = ECOVACS_COUNTRY_MAP[rawCountry.toUpperCase()] ?? rawCountry.toUp
 const cc = country.toLowerCase(); // verification endpoints use lowercase everywhere
 
 const machineId = forPlugin ? os.hostname() + '-mb' : os.hostname();
-const deviceId = EcoVacsAPI.getDeviceId(machineId);
+const deviceId = explicitDeviceId ?? EcoVacsAPI.getDeviceId(machineId);
+
+const target = explicitDeviceId ? 'explicit --device-id (may belong to another host)' : forPlugin ? 'Matterbridge plugin on this host' : 'debug/test scripts on this host';
 
 console.log(`[verify] Account:   ${username}`);
 console.log(`[verify] Country:   ${country} (endpoint: gl-${cc}-api.ecovacs.com)`);
-console.log(`[verify] Target:    ${forPlugin ? 'Matterbridge plugin' : 'debug/test scripts'} device ID`);
-console.log(`[verify] Device ID: ${deviceId} (derived from '${machineId}')`);
+console.log(`[verify] Target:    ${target}`);
+console.log(`[verify] Device ID: ${deviceId}${explicitDeviceId ? '' : ` (derived from '${machineId}')`}`);
 
 // ── Signed private API calls (same scheme as ecovacs-deebot / deebot-client) ──
 
@@ -184,7 +200,10 @@ const api = new EcoVacsAPI(deviceId, country, continent);
 try {
   await api.connect(username, EcoVacsAPI.md5(rawPassword));
   console.log('[verify] ✓ Stock login succeeded — this device ID is fully working.');
-  if (forPlugin) {
+  if (explicitDeviceId) {
+    console.log('[verify] Set this in the plugin config so the ID stays stable, then restart the plugin:');
+    console.log(`[verify]     "deviceId": "${deviceId}"`);
+  } else if (forPlugin) {
     console.log('[verify] The Matterbridge plugin on this machine will now authenticate normally.');
   } else {
     console.log('[verify] scripts/debug-ecovacs.mjs and scripts/test-commands.mjs will now authenticate normally.');
