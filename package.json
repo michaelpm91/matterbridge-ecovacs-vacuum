@@ -76,7 +76,8 @@
     "matterbridge:remove": "matterbridge -remove .",
     "matterbridge:enable": "matterbridge -enable .",
     "matterbridge:disable": "matterbridge -disable .",
-    "matterbridge:list": "matterbridge -list"
+    "matterbridge:list": "matterbridge -list",
+    "npmPack": "npx shx cp package.json package.json.backup && npm run prepublishOnly && npm pack && npx shx cp package.json.backup package.json && npx shx rm -f package.json.backup && npm run reset"
   },
   "dependencies": {
     "ecovacs-deebot": "^0.9.5"
