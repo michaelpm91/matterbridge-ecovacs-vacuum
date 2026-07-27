@@ -108,6 +108,15 @@ npm test
 npm run lint
 ```
 
+### Packing a tarball for testing
+
+```bash
+npm run npmPackDev   # 0.1.1-dev-<yyyymmdd>-<sha7>.tgz — stamped with the current commit
+npm run npmPack      # plain 0.1.1.tgz — for release candidates
+```
+
+Both build a production tarball (prod-only dependencies, shrinkwrapped), then restore your dev setup. Prefer `npmPackDev` for iterative testing: Matterbridge keys plugins by name+version, so re-uploading the same version risks testing stale code, and the embedded SHA tells you exactly which commit is running.
+
 The Jest suite mocks the `ecovacs-deebot` library completely — no robot or account needed.
 
 ## Acknowledgements
