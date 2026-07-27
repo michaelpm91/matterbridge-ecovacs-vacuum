@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed commands failing in the controller ("could not complete").** Command handlers wrote Matter attributes synchronously, which deadlocked against the writes Matterbridge's own RVC cluster servers make inside the same command transaction (`[synchronous-transaction-conflict]`). State updates from a command are now deferred until the transaction has completed.
+- `pause` and `resume` now use `clean_V2` on V2-generation firmware. The library's `pause()`/`resume()` send the non-V2 `clean` act, which the X2 ignores — the same trap already found with `stop`, so pausing from the controller had no effect on the robot.
+
 - Operational state is now resolved in one place from two independent inputs (the cleaning task and the dock) instead of cross-guards spread across both event handlers, so the precedence rule is explicit: the cleaning side wins while the robot is off the dock, otherwise the dock's view wins. `batChargeState` derives from the resolved state, so a dock reporting `charging` while the robot is away cleaning no longer claims the battery is charging. (Design borrowed from bubez81/matterbridge-ecovacs.)
 - Clean state is polled again on the X2 family using `getCleanInfo_V2`, which the firmware accepts — only the classic `getCleanInfo` is rejected with 20003. Previously the plugin relied solely on pushed events, so a dropped MQTT message left the state stale. Model definitions declare `cleanStatePoll` (replaces `cleanStateIsPushOnly`).
 - Reconnect now backs off `5s → 15s → 30s → 60s → 120s` instead of retrying flatly every 30s, and resets after a successful connect.
@@ -19,7 +22,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Recognise the CleanReport values a run started from the Ecovacs app reports — `entrust` (AI clean), `qcClean`, `singlePoint`, `move`, `comeClean`, `area`, plus `goCharging`/`slot_charging`. Previously an app-initiated clean showed as Docked in the controller while the robot was out working.
-- Emit the Matter `operationCompletion` event when a cleaning run ends, so controllers refresh instead of waiting for the next poll.
 
 - Configurable, persisted Ecovacs client **device ID** (`deviceId` config field). The plugin logs the ID it uses on every start, persists a generated one so restarts/hostname changes cannot silently invalidate Ecovacs device verification, and prefers an explicit config value. Error 1013 now logs the exact verification command to run.
 - `matterbridge-ecovacs-verify` CLI (`bin`) — the device verification is now part of the published package instead of a repo-only script, and takes `--device-id ID` so verification can be performed from any machine on behalf of the Matterbridge host (e.g. a Home Assistant VM).

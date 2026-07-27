@@ -915,39 +915,6 @@ describe('Matterbridge Ecovacs Plugin', () => {
     spy.mockRestore();
   });
 
-  it('should trigger operationCompletion when a cleaning run ends', async () => {
-    const spy = jest.spyOn(device().rvc, 'setAttribute').mockResolvedValue(undefined);
-    const eventSpy = jest.spyOn(device().rvc, 'triggerEvent').mockResolvedValue(true as never);
-
-    eventHandlers['CleanReport']?.('auto');
-    await Promise.resolve();
-    expect(eventSpy).not.toHaveBeenCalled(); // still running
-
-    eventHandlers['CleanReport']?.('idle');
-    await Promise.resolve();
-    expect(eventSpy).toHaveBeenCalledWith('rvcOperationalState', 'operationCompletion', { completionErrorCode: 0 }, expect.anything());
-
-    // Not re-triggered while it stays stopped
-    eventSpy.mockClear();
-    eventHandlers['CleanReport']?.('idle');
-    await Promise.resolve();
-    expect(eventSpy).not.toHaveBeenCalled();
-
-    eventSpy.mockRestore();
-    spy.mockRestore();
-  });
-
-  it('should log triggerEvent failures without throwing', async () => {
-    jest.spyOn(device().rvc, 'setAttribute').mockResolvedValue(undefined);
-    const eventSpy = jest.spyOn(device().rvc, 'triggerEvent').mockRejectedValue(new Error('event failed'));
-    eventHandlers['CleanReport']?.('auto');
-    await Promise.resolve();
-    eventHandlers['CleanReport']?.('idle');
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(mockLog.debug).toHaveBeenCalledWith(expect.stringContaining('triggerEvent operationCompletion error:'));
-    eventSpy.mockRestore();
-  });
-
   // ── Command handlers (Matter → Ecovacs) ───────────────────────────────────
 
   it('should forward pause/resume/goHome commands to vacbot', async () => {
@@ -958,8 +925,11 @@ describe('Matterbridge Ecovacs Plugin', () => {
     await rvc.executeCommandHandler('resume', undefined, 'rvcOperationalState');
     expect(device().isRobotPaused).toBe(false); // resume clears the flag
     await rvc.executeCommandHandler('goHome', undefined, 'rvcOperationalState');
-    expect(mockVacbot.pause).toHaveBeenCalled();
-    expect(mockVacbot.resume).toHaveBeenCalled();
+    // V2 firmware ignores the library's non-V2 clean act=pause/resume
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'pause', content: { type: '' } });
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'resume', content: { type: '' } });
+    expect(mockVacbot.pause).not.toHaveBeenCalled();
+    expect(mockVacbot.resume).not.toHaveBeenCalled();
     // goHome ends the job with the V2 stop before docking — charge() alone only
     // pauses an active V2 job, leaving it "paused" in the Ecovacs app forever.
     // The library's non-V2 stop() is never used on V2 firmware (it is ignored).
@@ -975,7 +945,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().vacbot = mockVacbot;
     device().cleanState = 0x02; // Paused, dock idle → a genuine mid-floor pause
     await rvc.executeCommandHandler('changeToMode', { newMode: 4 }, 'rvcRunMode');
-    expect(mockVacbot.resume).toHaveBeenCalled();
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'resume', content: { type: '' } });
     expect(mockVacbot.run).not.toHaveBeenCalledWith('Clean_V2');
     expect(device().isRobotPaused).toBe(false); // cleared after resume
     expect(device().resumePending).toBe(true); // set so stale CleanReport: pause is discarded
@@ -987,8 +957,35 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().vacbot = mockVacbot;
     // isRobotPaused is false (afterEach reset)
     await rvc.executeCommandHandler('changeToMode', { newMode: 4 }, 'rvcRunMode');
-    expect(mockVacbot.resume).not.toHaveBeenCalled();
+    expect(mockVacbot.run).not.toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'resume', content: { type: '' } });
     expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
+  });
+
+  it('should not write Matter attributes synchronously from a command handler', async () => {
+    // Command handlers run inside a Matter transaction that Matterbridge's own
+    // cluster servers write to. Writing attributes from the handler deadlocks
+    // against those writes ([synchronous-transaction-conflict]) and the
+    // controller reports "could not complete". The write must be deferred.
+    const rvc = device().rvc;
+    device().vacbot = mockVacbot;
+    const spy = jest.spyOn(rvc, 'setAttribute').mockResolvedValue(undefined);
+
+    for (const [command, request, cluster] of [
+      ['pause', undefined, 'rvcOperationalState'],
+      ['resume', undefined, 'rvcOperationalState'],
+      ['goHome', undefined, 'rvcOperationalState'],
+      ['changeToMode', { newMode: 2 }, 'rvcRunMode'],
+    ] as [string, unknown, string][]) {
+      spy.mockClear();
+      await rvc.executeCommandHandler(command, request, cluster);
+      expect(spy).not.toHaveBeenCalled();
+
+      // …but the state does land once the transaction has completed
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(spy).toHaveBeenCalled();
+    }
+
+    spy.mockRestore();
   });
 
   it('should log the identify command', async () => {

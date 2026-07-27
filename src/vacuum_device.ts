@@ -392,6 +392,19 @@ export class VacuumDevice {
   }
 
   /**
+   * Apply the resolved state after the current Matter transaction has completed.
+   *
+   * Command handlers run inside a Matter transaction that Matterbridge's own
+   * cluster servers also write to; writing attributes synchronously from a
+   * handler deadlocks against those writes ([synchronous-transaction-conflict]),
+   * which the controller surfaces as "could not complete". Deferring to the next
+   * tick lets the command response go out first.
+   */
+  private scheduleApplyState(): void {
+    setImmediate(() => this.applyState());
+  }
+
+  /**
    * Resolve the single Matter operational state from the two independent inputs
    * the robot reports: the cleaning task (CleanReport) and the dock (ChargeState).
    *
@@ -412,14 +425,8 @@ export class VacuumDevice {
     const resolved = cleanSideWins ? this.cleanState : this.chargeState;
     const runMode = resolved === OP_STATE.Running ? RUN_MODE.Cleaning : RUN_MODE.Idle;
 
-    // A cleaning run that has just ended: tell controllers so they refresh
-    // rather than waiting for the next poll (Apple Home relies on this).
-    const wasRunning = this.lastOpState === OP_STATE.Running;
     this.setRvcState(runMode, resolved);
     this.setBatChargeState(this.batChargeState(resolved));
-    if (wasRunning && resolved !== OP_STATE.Running) {
-      this.triggerOperationCompletion();
-    }
   }
 
   /**
@@ -554,25 +561,27 @@ export class VacuumDevice {
     // pause / resume / goHome come from RvcOperationalState cluster
     this.rvc.addCommandHandler('pause', async () => {
       this.log.info('Matter command: pause');
-      // Reflect the pause immediately; the robot confirms with CleanReport: pause.
       this.cleanState = OP_STATE.Paused;
-      this.applyState();
-      this.vacbot?.pause();
+      // An explicit pause supersedes any in-flight resume, so a pause the robot
+      // pushes from here on is genuine and must not be discarded as stale.
+      this.resumePending = false;
+      this.scheduleApplyState();
+      this.pauseResumeClean('pause');
     });
 
     this.rvc.addCommandHandler('resume', async () => {
       this.log.info('Matter command: resume');
       this.cleanState = OP_STATE.Running;
       this.resumePending = true;
-      this.applyState();
-      this.vacbot?.resume();
+      this.scheduleApplyState();
+      this.pauseResumeClean('resume');
     });
 
     this.rvc.addCommandHandler('goHome', async () => {
       this.log.info('Matter command: goHome');
       this.cleanState = OP_STATE.SeekingCharger;
       this.resumePending = false;
-      this.applyState();
+      this.scheduleApplyState();
       // End the job before docking: charge() alone only pauses an active V2 job,
       // leaving it "paused" in the Ecovacs app forever. (Verified live on the X2 —
       // the old advice to avoid stop-before-charge was based on the non-V2 stop,
@@ -604,8 +613,8 @@ export class VacuumDevice {
           this.log.info('Resuming paused clean');
           this.cleanState = OP_STATE.Running;
           this.resumePending = true;
-          this.applyState();
-          this.vacbot?.resume();
+          this.scheduleApplyState();
+          this.pauseResumeClean('resume');
         } else {
           // Any other non-Idle mode (Cleaning=2, SpotCleaning=4, etc.) → start clean
           this.startClean();
@@ -656,6 +665,25 @@ export class VacuumDevice {
     }
   }
 
+  /**
+   * Pause or resume the current job with the command variant the firmware accepts.
+   * As with stop, V2-generation robots ignore the library's non-V2 `clean`
+   * act=pause/resume — the X2 needs `clean_V2`.
+   *
+   * @param {'pause' | 'resume'} act - Which action to send.
+   */
+  private pauseResumeClean(act: 'pause' | 'resume'): void {
+    if (!this.vacbot) return;
+    if (this.definition.cleanCommand === 'Clean_V2') {
+      this.log.info(`Sending ${act} (clean_V2 act=${act})`);
+      this.vacbot.run('Generic', 'clean_V2', { act, content: { type: '' } });
+    } else if (act === 'pause') {
+      this.vacbot.pause();
+    } else {
+      this.vacbot.resume();
+    }
+  }
+
   private applyWorkMode(): void {
     if (this.definition.cleanTypeStrategy !== 'workMode') return;
     const key = (Object.keys(CLEAN_MODE_NUMBER) as CleanModeKey[]).find((k) => CLEAN_MODE_NUMBER[k] === this.currentCleanMode) ?? 'vacuum';
@@ -666,9 +694,10 @@ export class VacuumDevice {
 
   private startClean(): void {
     if (!this.vacbot) return;
-    // Report Running straight away; the robot confirms via CleanReport.
+    // Report Running straight away; the robot confirms via CleanReport. Deferred
+    // because startClean runs inside the changeToMode command transaction.
     this.cleanState = OP_STATE.Running;
-    this.applyState();
+    this.scheduleApplyState();
 
     // Apply suction intensity if a speed mode has been selected.
     if (this.currentSpeedMode !== null) {
