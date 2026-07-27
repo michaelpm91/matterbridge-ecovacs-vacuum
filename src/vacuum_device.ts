@@ -47,17 +47,42 @@ export interface EcovacsVacuum {
 const KEEPALIVE_INTERVAL_MS = 90_000;
 
 /**
+ * Milliseconds to let a command settle before sending one that depends on it.
+ *
+ * The Ecovacs commands are fire-and-forget, and the robot applies them
+ * asynchronously. Verified live: `setWorkMode` immediately followed by a clean
+ * starts the job under the *previous* work mode (a vacuum-only clean then
+ * washes the mop pad), and `charge` immediately after a stop is dropped, so the
+ * robot stops mid-floor instead of returning to the dock.
+ */
+const COMMAND_SETTLE_MS = 1_500;
+
+/**
+ * Resolve after the given delay.
+ *
+ * @param {number} ms - Milliseconds to wait.
+ * @returns {Promise<void>} A promise resolved after the delay.
+ */
+function delay(ms: number): Promise<void> {
+  return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+/**
  * Map an Ecovacs CleanReport value to the cleaning-side operational state.
  *
  * `Stopped` means "the robot is not running a task" and defers to the dock's
- * view in {@link VacuumDevice.applyState} — that covers 'idle'/'stop' as well as
- * the station's own activities ('washing', 'drying', 'airdrying'), during which
- * the robot sits on the dock.
+ * view in {@link VacuumDevice.applyState}.
+ *
+ * Returns null for the station's own activities ('washing', 'drying',
+ * 'airdrying'), which are not robot state transitions at all: a mop-pad wash
+ * happens both at the start of a job (before the robot departs) and after one,
+ * so letting it change the state makes a freshly started clean flip to
+ * Charging for the ~2 minutes the wash takes.
  *
  * @param {string} value - The CleanReport value pushed by the robot.
- * @returns {number} The matching RVC operational state.
+ * @returns {number | null} The matching RVC operational state, or null to leave the state unchanged.
  */
-function cleanReportToOpState(value: string): number {
+function cleanReportToOpState(value: string): number | null {
   switch (value) {
     // Active cleaning. 'entrust'/'qcClean'/'singlePoint'/'move'/'comeClean' are
     // started from the Ecovacs app (AI clean, quick clean, spot, manual drive);
@@ -78,6 +103,10 @@ function cleanReportToOpState(value: string): number {
     case 'returning':
     case 'goCharging':
       return OP_STATE.SeekingCharger;
+    case 'washing':
+    case 'drying':
+    case 'airdrying':
+      return null;
     default:
       return OP_STATE.Stopped;
   }
@@ -90,6 +119,9 @@ export class VacuumDevice {
   private rvc: RoboticVacuumCleaner | null = null;
   private currentCleanMode: number;
   private currentSpeedMode: number | null = null;
+
+  /** Settle time between dependent commands; overridable so tests need no timers. */
+  private commandSettleMs: number = COMMAND_SETTLE_MS;
 
   /** Matter speed mode number → ecovacs-deebot SetCleanSpeed level */
   private readonly speedLevelMap: Map<number, number>;
@@ -369,7 +401,9 @@ export class VacuumDevice {
       }
       if (s !== 'pause') this.resumePending = false;
 
-      this.cleanState = cleanReportToOpState(s);
+      const cleanState = cleanReportToOpState(s);
+      if (cleanState === null) return; // station activity — not a robot state change
+      this.cleanState = cleanState;
       this.applyState();
     });
 
@@ -426,7 +460,7 @@ export class VacuumDevice {
     const runMode = resolved === OP_STATE.Running ? RUN_MODE.Cleaning : RUN_MODE.Idle;
 
     this.setRvcState(runMode, resolved);
-    this.setBatChargeState(this.batChargeState(resolved));
+    this.setBatChargeState(this.batChargeState());
   }
 
   /**
@@ -452,20 +486,17 @@ export class VacuumDevice {
   }
 
   /**
-   * PowerSource batChargeState for the resolved operational state. Derived from
-   * the resolved state rather than the raw charge status so a dock that reports
-   * charging while the robot is away cleaning cannot claim the battery is
-   * charging.
+   * PowerSource batChargeState, following the dock's own report. Deriving it
+   * from the resolved operational state instead makes it flap between charging
+   * and not-charging while a job starts, since the dock keeps reporting
+   * `charging` until the robot has actually left it.
    *
-   * @param {number} resolved - The resolved RVC operational state.
    * @returns {number} The batChargeState value to report.
    */
-  private batChargeState(resolved: number): number {
-    if (resolved === OP_STATE.Charging) return BAT_CHARGE_STATE.IsCharging;
-    const docked = resolved === OP_STATE.Docked;
+  private batChargeState(): number {
     const charging = this.lastChargeStatus === 'charging' || this.lastChargeStatus === 'slot_charging';
-    if (docked && charging && this.lastBatteryPct >= 100) return BAT_CHARGE_STATE.IsAtFullCharge;
-    return BAT_CHARGE_STATE.IsNotCharging;
+    if (!charging) return BAT_CHARGE_STATE.IsNotCharging;
+    return this.lastBatteryPct >= 100 ? BAT_CHARGE_STATE.IsAtFullCharge : BAT_CHARGE_STATE.IsCharging;
   }
 
   /** Emit the RVC OperationCompletion event so controllers refresh promptly. */
@@ -588,7 +619,8 @@ export class VacuumDevice {
       // which V2 firmware ignores; the pausing was caused by charge() itself.)
       if (this.vacbot) {
         this.stopClean();
-        this.vacbot.charge();
+        await delay(this.commandSettleMs);
+        this.vacbot?.charge();
       }
     });
 
@@ -617,7 +649,7 @@ export class VacuumDevice {
           this.pauseResumeClean('resume');
         } else {
           // Any other non-Idle mode (Cleaning=2, SpotCleaning=4, etc.) → start clean
-          this.startClean();
+          await this.startClean();
         }
       } else {
         // Clean mode changed — store for next clean, do not start
@@ -692,7 +724,7 @@ export class VacuumDevice {
     this.vacbot.run('Generic', 'setWorkMode', { mode });
   }
 
-  private startClean(): void {
+  private async startClean(): Promise<void> {
     if (!this.vacbot) return;
     // Report Running straight away; the robot confirms via CleanReport. Deferred
     // because startClean runs inside the changeToMode command transaction.
@@ -710,6 +742,7 @@ export class VacuumDevice {
       const ecovacsIds = this.selectedAreaIds.map((id) => this.spotAreaMap.get(id)).filter(Boolean) as string[];
       if (ecovacsIds.length > 0) {
         this.applyWorkMode();
+        await delay(this.commandSettleMs);
         this.startSpotAreaClean(ecovacsIds);
         return;
       }
@@ -719,6 +752,7 @@ export class VacuumDevice {
     // NOTE: vacbot.clean() sends the non-V2 'Clean' command which 950-type robots ignore —
     // the model definition selects the command variant the firmware accepts.
     this.applyWorkMode();
+    await delay(this.commandSettleMs);
     this.log.info(`Starting full clean (${this.definition.cleanCommand})`);
     this.vacbot.run(this.definition.cleanCommand);
   }

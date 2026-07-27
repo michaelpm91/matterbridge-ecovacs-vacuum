@@ -220,6 +220,8 @@ describe('Matterbridge Ecovacs Plugin', () => {
     mockApi.user_access_token = 'test-token';
     // Replace the platform's real on-disk storage context with the deterministic mock
     if (instance) (instance as any).context = mockContext;
+    // Command settle delays are real timers; tests drive commands back-to-back
+    if (device()) device().commandSettleMs = 0;
   });
 
   afterEach(() => {
@@ -575,17 +577,22 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().lastChargeStatus = 'idle';
   });
 
-  it('should treat CleanReport: washing as not cleaning and defer to the dock', async () => {
-    // The all-in-one station emits CleanReport('washing') ~once/second while pre-washing
-    // the mop pad before the robot departs. The robot is still docked, so the dock's
-    // state is the honest one to report — never Running.
+  it('should leave the state untouched while the station washes, dries or air-dries', async () => {
+    // A mop-pad wash runs both before a job starts and after one ends, and the
+    // station reports it ~once/second for minutes. Treating it as a state change
+    // makes a freshly started clean flip to Charging for the length of the wash.
     const spy = jest.spyOn(device().rvc, 'setAttribute').mockResolvedValue(undefined);
 
-    eventHandlers['CleanReport']?.('washing');
+    eventHandlers['CleanReport']?.('auto'); // robot is cleaning
     await Promise.resolve();
-    expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x01, expect.anything());
-    expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x42, expect.anything()); // Docked
-    expect(device().isRobotPaused).toBe(false);
+    spy.mockClear();
+
+    for (const activity of ['washing', 'drying', 'airdrying']) {
+      eventHandlers['CleanReport']?.(activity);
+      await Promise.resolve();
+    }
+    expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
+    expect(device().cleanState).toBe(0x01); // still Running
 
     spy.mockRestore();
   });
@@ -655,13 +662,10 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().lastChargeStatus = 'charging';
     spy.mockClear();
 
-    // BatteryInfo at 100% must not knock the robot out of Running, and the dock's
-    // charging claim must not be reported while the robot is away cleaning.
+    // BatteryInfo at 100% must not knock the robot out of Running
     eventHandlers['BatteryInfo']?.(100);
     await Promise.resolve();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
-    expect(spy).not.toHaveBeenCalledWith('powerSource', 'batChargeState', 1, expect.anything());
-    expect(spy).not.toHaveBeenCalledWith('powerSource', 'batChargeState', 2, expect.anything());
 
     spy.mockRestore();
     device().lastChargeStatus = 'idle';
@@ -988,6 +992,37 @@ describe('Matterbridge Ecovacs Plugin', () => {
     spy.mockRestore();
   });
 
+  it('should let a command settle before sending one that depends on it', async () => {
+    // The Ecovacs commands are fire-and-forget and applied asynchronously.
+    // Verified live: setWorkMode immediately followed by a clean starts the job
+    // under the previous work mode (a vacuum-only clean then washed the mop
+    // pad), and charge immediately after a stop is dropped, so the robot stops
+    // mid-floor instead of docking.
+    const d = device();
+    d.vacbot = mockVacbot;
+    d.commandSettleMs = 5_000;
+
+    // Clean: work mode is sent, the clean command is not — until the delay elapses
+    jest.clearAllMocks();
+    const cleanStarted = d.startClean();
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
+    expect(mockVacbot.run).not.toHaveBeenCalledWith('Clean_V2');
+    jest.advanceTimersByTime(5_000);
+    await cleanStarted;
+    expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
+
+    // goHome: stop is sent, charge is held back
+    jest.clearAllMocks();
+    const goingHome = device().rvc.executeCommandHandler('goHome', undefined, 'rvcOperationalState');
+    expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
+    expect(mockVacbot.charge).not.toHaveBeenCalled();
+    jest.advanceTimersByTime(5_000);
+    await goingHome;
+    expect(mockVacbot.charge).toHaveBeenCalled();
+
+    d.commandSettleMs = 0;
+  });
+
   it('should log the identify command', async () => {
     const rvc = device().rvc;
     await rvc.executeCommandHandler('identify', { identifyTime: 5 }, 'identify');
@@ -1125,7 +1160,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     for (const [speedMode, expectedLevel] of cases) {
       jest.clearAllMocks();
       device().currentSpeedMode = speedMode;
-      device().startClean();
+      await device().startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('SetCleanSpeed', expectedLevel);
     }
   });
@@ -1311,6 +1346,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     const makeDevice = (definition: any): any => {
       const d: any = new VacuumDevice(instance, mockLog, { did: 'other-did', name: 'Generic Bot' }, definition);
       d.vacbot = mockVacbot;
+      d.commandSettleMs = 0;
       d.spotAreaMap = new Map([
         [1, '0'],
         [2, '1'],
@@ -1318,10 +1354,10 @@ describe('Matterbridge Ecovacs Plugin', () => {
       return d;
     };
 
-    it('uses SpotArea_V2 for room cleans on the default profile (no work-mode command sent)', () => {
+    it('uses SpotArea_V2 for room cleans on the default profile (no work-mode command sent)', async () => {
       const d = makeDevice(DEFAULT_MODEL);
       d.selectedAreaIds = [1, 2];
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('SpotArea_V2', '0,1', 1);
       expect(mockVacbot.run).not.toHaveBeenCalledWith('Generic', 'setWorkMode', expect.anything());
     });
@@ -1332,7 +1368,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
       expect(mockVacbot.run).toHaveBeenCalledWith('GetCleanState');
     });
 
-    it('uses the legacy SpotArea command and pins the work mode when the model declares workMode', () => {
+    it('uses the legacy SpotArea command and pins the work mode when the model declares workMode', async () => {
       const d = makeDevice({
         ...DEFAULT_MODEL,
         cleanCommand: 'Clean',
@@ -1341,20 +1377,20 @@ describe('Matterbridge Ecovacs Plugin', () => {
         cleanModes: ['vacuum', 'mop'],
       });
       d.selectedAreaIds = [1, 2];
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
       expect(mockVacbot.run).toHaveBeenCalledWith('SpotArea', 'start', '0,1');
 
       // Full clean uses the legacy Clean command
       jest.clearAllMocks();
       d.selectedAreaIds = [];
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Clean');
 
       // Mop mode pins work mode 2
       jest.clearAllMocks();
       d.currentCleanMode = 2; // mop
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 2 });
 
       // Legacy (non-V2) robots stop with the library's stop()
@@ -1364,18 +1400,18 @@ describe('Matterbridge Ecovacs Plugin', () => {
       expect(mockVacbot.run).not.toHaveBeenCalledWith('Generic', 'clean_V2', expect.anything());
     });
 
-    it('ignores selected areas and starts a full clean when spotAreaStrategy is none', () => {
+    it('ignores selected areas and starts a full clean when spotAreaStrategy is none', async () => {
       const d = makeDevice({ ...DEFAULT_MODEL, spotAreaStrategy: 'none' });
       d.selectedAreaIds = [1];
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
       expect(mockVacbot.run).not.toHaveBeenCalledWith('SpotArea_V2', expect.anything(), expect.anything());
     });
 
-    it('skips the room clean and starts a full clean when no selected area maps to an Ecovacs ID', () => {
+    it('skips the room clean and starts a full clean when no selected area maps to an Ecovacs ID', async () => {
       const d = makeDevice(DEFAULT_MODEL);
       d.selectedAreaIds = [99]; // not in spotAreaMap
-      d.startClean();
+      await d.startClean();
       expect(mockVacbot.run).toHaveBeenCalledWith('Clean_V2');
       expect(mockVacbot.run).not.toHaveBeenCalledWith('SpotArea_V2', expect.anything(), expect.anything());
     });

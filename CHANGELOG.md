@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A vacuum-only clean no longer triggers a mop-pad wash, and "return to dock" actually docks the robot.** Ecovacs commands are applied asynchronously, so a clean sent immediately after `setWorkMode` ran under the _previous_ work mode, and a `charge` sent immediately after a stop was dropped — leaving the robot stopped mid-floor. Dependent commands now wait for the previous one to settle.
+- Station activity (`washing`, `drying`, `airdrying`) no longer changes the reported state. A mop-pad wash runs both before and after a job and is reported every second for minutes, so treating it as a state change made a freshly started clean flip to Charging for the length of the wash — which controllers showed as stuck "preparing".
+- `batChargeState` follows the dock's own report again rather than the resolved operational state, which made it flap between charging and not-charging while a job started.
+
 - **Fixed commands failing in the controller ("could not complete").** Command handlers wrote Matter attributes synchronously, which deadlocked against the writes Matterbridge's own RVC cluster servers make inside the same command transaction (`[synchronous-transaction-conflict]`). State updates from a command are now deferred until the transaction has completed.
 - `pause` and `resume` now use `clean_V2` on V2-generation firmware. The library's `pause()`/`resume()` send the non-V2 `clean` act, which the X2 ignores — the same trap already found with `stop`, so pausing from the controller had no effect on the robot.
 
