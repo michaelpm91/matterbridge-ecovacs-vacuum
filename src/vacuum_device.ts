@@ -46,6 +46,43 @@ export interface EcovacsVacuum {
 /** Milliseconds between keepalive state polls. */
 const KEEPALIVE_INTERVAL_MS = 90_000;
 
+/**
+ * Map an Ecovacs CleanReport value to the cleaning-side operational state.
+ *
+ * `Stopped` means "the robot is not running a task" and defers to the dock's
+ * view in {@link VacuumDevice.applyState} — that covers 'idle'/'stop' as well as
+ * the station's own activities ('washing', 'drying', 'airdrying'), during which
+ * the robot sits on the dock.
+ *
+ * @param {string} value - The CleanReport value pushed by the robot.
+ * @returns {number} The matching RVC operational state.
+ */
+function cleanReportToOpState(value: string): number {
+  switch (value) {
+    // Active cleaning. 'entrust'/'qcClean'/'singlePoint'/'move'/'comeClean' are
+    // started from the Ecovacs app (AI clean, quick clean, spot, manual drive);
+    // without them an app-initiated run would show as Docked in the controller.
+    case 'auto':
+    case 'spot':
+    case 'spot_area':
+    case 'custom_area':
+    case 'area':
+    case 'entrust':
+    case 'qcClean':
+    case 'singlePoint':
+    case 'move':
+    case 'comeClean':
+      return OP_STATE.Running;
+    case 'pause':
+      return OP_STATE.Paused;
+    case 'returning':
+    case 'goCharging':
+      return OP_STATE.SeekingCharger;
+    default:
+      return OP_STATE.Stopped;
+  }
+}
+
 /** Bridges one Ecovacs robot vacuum to a Matter RVC endpoint. */
 export class VacuumDevice {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,11 +95,16 @@ export class VacuumDevice {
   private readonly speedLevelMap: Map<number, number>;
 
   /**
-   * Last known charge state received from the robot.
-   * Used in the CleanReport handler to avoid overriding Charging/SeekingCharger
-   * with Docked when 'idle'/'stop' arrives after a ChargeState event on the same poll.
+   * Raw ChargeState value last pushed by the dock. One of the two independent
+   * state inputs resolved by {@link applyState}; see also {@link chargeState}.
    */
   private lastChargeStatus: string = 'idle';
+
+  /**
+   * Cleaning-side operational state derived from CleanReport. `Stopped` means
+   * "no task running", which defers to the dock's state in {@link applyState}.
+   */
+  private cleanState: number = OP_STATE.Stopped;
 
   /** Maps Matter ServiceArea areaId → Ecovacs spot area ID string */
   private spotAreaMap: Map<number, string> = new Map();
@@ -85,9 +127,14 @@ export class VacuumDevice {
    * True when the robot is paused (either by our pause command or CleanReport: pause).
    * Used to send vacbot.resume() instead of startClean() when HomeKit sends changeToMode
    * with SpotCleaning(4) as a resume-after-pause action.
-   * Also prevents ChargeState: idle from overriding the Paused state with Docked.
+   *
+   * @returns {boolean} True when the robot is paused mid-floor.
    */
-  private isRobotPaused: boolean = false;
+  private get isRobotPaused(): boolean {
+    // A pause reported while the dock is charging means an interrupted task on a
+    // docked robot, not a robot paused mid-floor waiting to be resumed.
+    return this.cleanState === OP_STATE.Paused && this.chargeState !== OP_STATE.Charging;
+  }
 
   /**
    * True after we send vacbot.resume() and before the robot confirms it's running again.
@@ -201,15 +248,16 @@ export class VacuumDevice {
   }
 
   /**
-   * Poll the robot state. Clean state is only polled on models whose firmware
-   * supports it — push-only models (X2) reject GetCleanState with body.code=20003
-   * "rcp not support" and push CleanReport events automatically instead.
+   * Poll the robot state, using the clean-state command variant the firmware
+   * accepts. Polling matters even though the robot pushes CleanReport events:
+   * a dropped MQTT message would otherwise leave the Matter state stale until
+   * the next state change.
    */
   private pollState(): void {
     this.vacbot.run('GetBatteryState');
     this.vacbot.run('GetChargeState');
-    if (!this.definition.cleanStateIsPushOnly) {
-      this.vacbot.run('GetCleanState');
+    if (this.definition.cleanStatePoll !== 'none') {
+      this.vacbot.run(this.definition.cleanStatePoll);
     }
   }
 
@@ -298,11 +346,9 @@ export class VacuumDevice {
         this.log.debug(`setAttribute batChargeLevel error: ${String(err)}`);
       });
       this.lastBatteryPct = pct;
-      // Re-evaluate charging state: reaching 100% while charging upgrades to IsAtFullCharge.
-      // Skip while actively cleaning — the dock reports charging independently of the robot.
-      if (this.lastChargeStatus === 'charging' && this.lastRunMode !== RUN_MODE.Cleaning) {
-        this.updateChargeState();
-      }
+      // Battery level feeds the resolved state: reaching 100% while charging
+      // upgrades to IsAtFullCharge/Docked.
+      this.applyState();
       this.log.debug(`Battery: ${pct}% (level=${level})`);
     });
 
@@ -313,84 +359,24 @@ export class VacuumDevice {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const s: string = (status as any) ?? 'spot_area';
       this.log.info(`CleanReport: ${s}`);
-      switch (s) {
-        case 'auto':
-        case 'spot':
-        case 'spot_area':
-        case 'custom_area':
-          this.isRobotPaused = false;
-          this.resumePending = false;
-          this.setRvcState(RUN_MODE.Cleaning, OP_STATE.Running);
-          break;
-        case 'pause':
-          if (this.resumePending) {
-            // Resume was sent but the robot's push for the original pause arrived late.
-            // The robot is already resuming — discard this stale event.
-            this.log.debug('CleanReport: pause ignored — resume already sent');
-            this.resumePending = false;
-            break;
-          }
-          // If the dock is already charging, this is a stale event from the firmware
-          // marking the interrupted task as "paused" after goHome completes.
-          // A genuine user-pause happens while the robot is on the floor (lastChargeStatus='idle').
-          if (this.lastChargeStatus !== 'charging') {
-            this.isRobotPaused = true;
-            this.setRvcState(RUN_MODE.Idle, OP_STATE.Paused);
-          }
-          break;
-        case 'returning':
-          this.isRobotPaused = false;
-          this.resumePending = false;
-          this.setRvcState(RUN_MODE.Idle, OP_STATE.SeekingCharger);
-          break;
-        case 'washing':
-          // All-in-one station is pre-washing the mop pad before the robot departs.
-          // Robot is still at dock — no state change needed.
-          this.isRobotPaused = false;
-          break;
-        default:
-          // 'stop', 'idle' → not cleaning; defer to lastChargeStatus to avoid
-          // overriding Charging/SeekingCharger when both events arrive on the same poll.
-          this.isRobotPaused = false;
-          this.resumePending = false;
-          if (this.lastChargeStatus === 'charging') {
-            this.updateChargeState();
-          } else if (this.lastChargeStatus === 'returning') {
-            this.setRvcState(RUN_MODE.Idle, OP_STATE.SeekingCharger);
-          } else {
-            this.setRvcState(RUN_MODE.Idle, OP_STATE.Docked);
-          }
-          break;
+
+      if (s === 'pause' && this.resumePending) {
+        // Resume was sent but the robot's push for the original pause arrived late.
+        // The robot is already resuming — discard this stale event.
+        this.log.debug('CleanReport: pause ignored — resume already sent');
+        this.resumePending = false;
+        return;
       }
+      if (s !== 'pause') this.resumePending = false;
+
+      this.cleanState = cleanReportToOpState(s);
+      this.applyState();
     });
 
     this.vacbot.on('ChargeState', (status: string) => {
       this.log.info(`ChargeState: ${status}`);
       this.lastChargeStatus = status;
-      // The dock station emits ChargeState independently of the robot's movement.
-      // When actively cleaning, these events must not override the CleanReport state.
-      // lastChargeStatus is still updated above for use by the CleanReport default branch.
-      if (this.lastRunMode === RUN_MODE.Cleaning) {
-        this.log.debug('ChargeState ignored — robot is actively cleaning');
-        return;
-      }
-      switch (status) {
-        case 'returning':
-          this.setRvcState(RUN_MODE.Idle, OP_STATE.SeekingCharger);
-          this.setBatChargeState(BAT_CHARGE_STATE.IsNotCharging);
-          break;
-        case 'charging':
-          this.updateChargeState();
-          break;
-        default:
-          // 'idle' → robot is on the floor (not on dock).
-          // If the robot is paused, don't override the Paused state with Docked.
-          if (!this.isRobotPaused) {
-            this.setRvcState(RUN_MODE.Idle, OP_STATE.Docked);
-          }
-          this.setBatChargeState(BAT_CHARGE_STATE.IsNotCharging);
-          break;
-      }
+      this.applyState();
     });
 
     this.vacbot.on('ErrorCode', (code: string) => {
@@ -402,6 +388,85 @@ export class VacuumDevice {
         this.log.warn(`Ecovacs error ${code}: ${desc}`);
       }
       this.setRvcError(rvcError);
+    });
+  }
+
+  /**
+   * Resolve the single Matter operational state from the two independent inputs
+   * the robot reports: the cleaning task (CleanReport) and the dock (ChargeState).
+   *
+   * The cleaning side wins whenever the robot is off the dock doing something,
+   * because the station reports charging/idle independently of the robot — e.g.
+   * it announces `charging` the instant the robot unplugs, which must not
+   * overwrite `Running`. Otherwise the dock's view wins, so a finished or
+   * stopped task falls back to Charging/Docked rather than a stale Stopped.
+   *
+   * The one exception is `Paused` while the dock is charging: the robot is home
+   * with an interrupted task, not paused mid-floor, so the dock's view is the
+   * honest one to show.
+   */
+  private applyState(): void {
+    const cleanSideWins =
+      this.cleanState === OP_STATE.Running || this.cleanState === OP_STATE.SeekingCharger || (this.cleanState === OP_STATE.Paused && this.chargeState !== OP_STATE.Charging);
+
+    const resolved = cleanSideWins ? this.cleanState : this.chargeState;
+    const runMode = resolved === OP_STATE.Running ? RUN_MODE.Cleaning : RUN_MODE.Idle;
+
+    // A cleaning run that has just ended: tell controllers so they refresh
+    // rather than waiting for the next poll (Apple Home relies on this).
+    const wasRunning = this.lastOpState === OP_STATE.Running;
+    this.setRvcState(runMode, resolved);
+    this.setBatChargeState(this.batChargeState(resolved));
+    if (wasRunning && resolved !== OP_STATE.Running) {
+      this.triggerOperationCompletion();
+    }
+  }
+
+  /**
+   * Dock-side operational state, derived from the last ChargeState and battery level.
+   *
+   * @returns {number} The RVC operational state the dock implies.
+   */
+  private get chargeState(): number {
+    switch (this.lastChargeStatus) {
+      case 'returning':
+      case 'going':
+      case 'goCharging':
+        return OP_STATE.SeekingCharger;
+      case 'charging':
+      case 'slot_charging':
+        // At 100% show Docked ("Ready") rather than Charging, which controllers
+        // otherwise display indefinitely.
+        return this.lastBatteryPct >= 100 ? OP_STATE.Docked : OP_STATE.Charging;
+      default:
+        // 'idle' — robot is off the dock and not cleaning.
+        return OP_STATE.Docked;
+    }
+  }
+
+  /**
+   * PowerSource batChargeState for the resolved operational state. Derived from
+   * the resolved state rather than the raw charge status so a dock that reports
+   * charging while the robot is away cleaning cannot claim the battery is
+   * charging.
+   *
+   * @param {number} resolved - The resolved RVC operational state.
+   * @returns {number} The batChargeState value to report.
+   */
+  private batChargeState(resolved: number): number {
+    if (resolved === OP_STATE.Charging) return BAT_CHARGE_STATE.IsCharging;
+    const docked = resolved === OP_STATE.Docked;
+    const charging = this.lastChargeStatus === 'charging' || this.lastChargeStatus === 'slot_charging';
+    if (docked && charging && this.lastBatteryPct >= 100) return BAT_CHARGE_STATE.IsAtFullCharge;
+    return BAT_CHARGE_STATE.IsNotCharging;
+  }
+
+  /** Emit the RVC OperationCompletion event so controllers refresh promptly. */
+  private triggerOperationCompletion(): void {
+    if (this.rvc === null) return;
+    this.log.info('Cleaning run ended — triggering operationCompletion');
+    this.rvc.triggerEvent('rvcOperationalState', 'operationCompletion', { completionErrorCode: RVC_ERROR.NoError }, this.log).catch((err: unknown) => {
+      this.log.debug(`triggerEvent operationCompletion error: ${String(err)}`);
     });
   }
 
@@ -440,22 +505,6 @@ export class VacuumDevice {
     this.rvc.setAttribute('powerSource', 'batChargeState', state, this.log).catch((err: unknown) => {
       this.log.debug(`setAttribute powerSource.batChargeState error: ${String(err)}`);
     });
-  }
-
-  /**
-   * Set the correct operational state and batChargeState when the robot is docked
-   * and charging. Once the battery reaches 100%, transitions from Charging→Docked
-   * (so HomeKit shows "Ready" rather than "Charging") and batChargeState is set to
-   * IsAtFullCharge. Below 100% it remains Charging/IsCharging.
-   */
-  private updateChargeState(): void {
-    if (this.lastBatteryPct >= 100) {
-      this.setRvcState(RUN_MODE.Idle, OP_STATE.Docked);
-      this.setBatChargeState(BAT_CHARGE_STATE.IsAtFullCharge);
-    } else {
-      this.setRvcState(RUN_MODE.Idle, OP_STATE.Charging);
-      this.setBatChargeState(BAT_CHARGE_STATE.IsCharging);
-    }
   }
 
   // ── Matter device creation ──────────────────────────────────────────────────
@@ -505,21 +554,25 @@ export class VacuumDevice {
     // pause / resume / goHome come from RvcOperationalState cluster
     this.rvc.addCommandHandler('pause', async () => {
       this.log.info('Matter command: pause');
-      this.isRobotPaused = true;
+      // Reflect the pause immediately; the robot confirms with CleanReport: pause.
+      this.cleanState = OP_STATE.Paused;
+      this.applyState();
       this.vacbot?.pause();
     });
 
     this.rvc.addCommandHandler('resume', async () => {
       this.log.info('Matter command: resume');
-      this.isRobotPaused = false;
+      this.cleanState = OP_STATE.Running;
       this.resumePending = true;
+      this.applyState();
       this.vacbot?.resume();
     });
 
     this.rvc.addCommandHandler('goHome', async () => {
       this.log.info('Matter command: goHome');
-      this.isRobotPaused = false;
+      this.cleanState = OP_STATE.SeekingCharger;
       this.resumePending = false;
+      this.applyState();
       // End the job before docking: charge() alone only pauses an active V2 job,
       // leaving it "paused" in the Ecovacs app forever. (Verified live on the X2 —
       // the old advice to avoid stop-before-charge was based on the non-V2 stop,
@@ -549,8 +602,9 @@ export class VacuumDevice {
         } else if (this.isRobotPaused) {
           // HomeKit sends SpotCleaning(4) as a resume-after-pause signal; honour it.
           this.log.info('Resuming paused clean');
-          this.isRobotPaused = false;
+          this.cleanState = OP_STATE.Running;
           this.resumePending = true;
+          this.applyState();
           this.vacbot?.resume();
         } else {
           // Any other non-Idle mode (Cleaning=2, SpotCleaning=4, etc.) → start clean
@@ -612,7 +666,9 @@ export class VacuumDevice {
 
   private startClean(): void {
     if (!this.vacbot) return;
-    this.isRobotPaused = false;
+    // Report Running straight away; the robot confirms via CleanReport.
+    this.cleanState = OP_STATE.Running;
+    this.applyState();
 
     // Apply suction intensity if a speed mode has been selected.
     if (this.currentSpeedMode !== null) {

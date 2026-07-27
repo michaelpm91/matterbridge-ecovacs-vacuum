@@ -192,6 +192,7 @@ function showMenu() {
   console.log('─────────────────────────────────────────────────');
   console.log(' State');
   console.log('  s       Poll state (battery + charge + clean + WaterInfo/sweepType)');
+  console.log('  sv      Poll clean state with the V2 command (getCleanInfo_V2)');
   console.log('  r       Discover rooms (run this before cf<id> / cs<id>)');
   console.log('  l       List discovered rooms and their IDs');
   console.log('');
@@ -248,6 +249,9 @@ rl.on('line', (line) => {
     vacbot.run('GetChargeState');
     vacbot.run('GetCleanState');
     vacbot.run('GetWaterInfo');
+  } else if (cmd === 'sv') {
+    console.log('[test] → GetCleanState_V2 (getCleanInfo_V2 — plain getCleanInfo is rejected 20003 on X2)');
+    vacbot.run('GetCleanState_V2');
   } else if (cmd === 'r') {
     console.log('[test] → GetMaps (chain: CurrentMapMID → GetSpotAreas → GetSpotAreaInfo × n)');
     vacbot.run('GetMaps');

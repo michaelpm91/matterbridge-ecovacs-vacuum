@@ -74,8 +74,16 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
   /** Milliseconds to wait for the Ecovacs cloud HTTP calls before giving up. */
   private static readonly CLOUD_TIMEOUT_MS = 15_000;
 
-  /** Milliseconds to wait before attempting a reconnect after MQTT closes. */
-  private static readonly RECONNECT_DELAY_MS = 30_000;
+  /**
+   * Backoff schedule for reconnect attempts. A dropped MQTT connection is often
+   * momentary, so the first retry is quick; repeated failures (cloud outage)
+   * back off rather than hammering the API, which is also what provokes Ecovacs
+   * into demanding device verification again.
+   */
+  private static readonly RECONNECT_DELAYS_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+
+  /** Index into RECONNECT_DELAYS_MS; reset on a successful connect. */
+  private reconnectAttempt: number = 0;
 
   constructor(matterbridge: PlatformMatterbridge, log: AnsiLogger, config: PlatformConfig) {
     super(matterbridge, log, config);
@@ -271,7 +279,7 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
   }
 
   /**
-   * Schedule a reconnect attempt after RECONNECT_DELAY_MS.
+   * Schedule a reconnect attempt, backing off on repeated failures.
    * Guards against concurrent attempts; no-ops when shutdown has started.
    *
    * @param {EcovacsPlatformConfig} cfg - The platform configuration containing credentials and region.
@@ -279,6 +287,10 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
   scheduleReconnect(cfg: EcovacsPlatformConfig): void {
     if (this.isReconnecting || this.reconnectTimer) return;
     this.isReconnecting = true;
+    const delays = EcovacsPlatform.RECONNECT_DELAYS_MS;
+    const delay = delays[Math.min(this.reconnectAttempt, delays.length - 1)];
+    this.reconnectAttempt++;
+    this.log.info(`Scheduling Ecovacs reconnect in ${delay / 1000}s (attempt ${this.reconnectAttempt})`);
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       this.isReconnecting = false;
@@ -289,10 +301,11 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
           await device.detach();
         }
         await this.connectEcovacs(cfg);
+        this.reconnectAttempt = 0;
       } catch (err: unknown) {
         this.log.error(`Reconnect failed: ${String(err)} — will retry`);
         this.scheduleReconnect(cfg);
       }
-    }, EcovacsPlatform.RECONNECT_DELAY_MS);
+    }, delay);
   }
 }

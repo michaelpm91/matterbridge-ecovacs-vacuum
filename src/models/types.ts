@@ -70,11 +70,14 @@ export interface ModelDefinition {
    */
   cleanTypeStrategy: 'workMode' | 'none';
   /**
-   * Firmware rejects GetCleanState polling (X2 responds body.code=20003
-   * "rcp not support") and pushes CleanReport events instead. When true the
-   * plugin never polls clean state.
+   * Which clean-state poll the firmware accepts:
+   * - `GetCleanState`    — classic `getCleanInfo`.
+   * - `GetCleanState_V2` — `getCleanInfo_V2`. Required on X2-family firmware,
+   *   which rejects the classic command with body.code=20003 "rcp not support"
+   *   while answering the V2 variant normally (verified live).
+   * - `none`             — never poll; rely solely on pushed CleanReport events.
    */
-  cleanStateIsPushOnly?: boolean;
+  cleanStatePoll: 'GetCleanState' | 'GetCleanState_V2' | 'none';
   /** Cleaning type modes to expose. Order is preserved; the first entry is the default. */
   cleanModes: CleanModeKey[];
   /** Suction intensity levels to expose. Empty array hides the speed picker. */
