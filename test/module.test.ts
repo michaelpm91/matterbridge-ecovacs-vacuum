@@ -1016,11 +1016,35 @@ describe('Matterbridge Ecovacs Plugin', () => {
     const goingHome = device().rvc.executeCommandHandler('goHome', undefined, 'rvcOperationalState');
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', { act: 'stop', content: { type: '' } });
     expect(mockVacbot.charge).not.toHaveBeenCalled();
-    jest.advanceTimersByTime(5_000);
     await goingHome;
+    jest.advanceTimersByTime(5_000);
+    await new Promise((resolve) => setImmediate(resolve));
     expect(mockVacbot.charge).toHaveBeenCalled();
 
     d.commandSettleMs = 0;
+  });
+
+  it('should report the run mode the controller asked for while cleaning', async () => {
+    // Apple Home asks for SpotCleaning (4) when rooms are selected. Reporting
+    // Cleaning (2) back makes the controller believe its request did not take,
+    // so the vacuum does not show as cleaning even though it is.
+    const rvc = device().rvc;
+    device().vacbot = mockVacbot;
+    const spy = jest.spyOn(rvc, 'setAttribute').mockResolvedValue(undefined);
+
+    await rvc.executeCommandHandler('changeToMode', { newMode: 4 }, 'rvcRunMode');
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(spy).toHaveBeenCalledWith('rvcRunMode', 'currentMode', 4, expect.anything());
+    expect(spy).not.toHaveBeenCalledWith('rvcRunMode', 'currentMode', 2, expect.anything());
+
+    // …and the robot's own report keeps that mode rather than reverting to Cleaning
+    spy.mockClear();
+    device().lastRunMode = -1;
+    eventHandlers['CleanReport']?.('spot_area');
+    await Promise.resolve();
+    expect(spy).toHaveBeenCalledWith('rvcRunMode', 'currentMode', 4, expect.anything());
+
+    spy.mockRestore();
   });
 
   it('should log the identify command', async () => {

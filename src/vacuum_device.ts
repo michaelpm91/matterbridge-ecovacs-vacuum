@@ -120,6 +120,14 @@ export class VacuumDevice {
   private currentCleanMode: number;
   private currentSpeedMode: number | null = null;
 
+  /**
+   * Run mode the controller last asked for when starting a clean (Cleaning or
+   * SpotCleaning). Reported back while the robot runs, because a controller
+   * that asked for SpotCleaning and is told the robot is in Cleaning may treat
+   * its request as not having taken effect.
+   */
+  private activeRunMode: number = RUN_MODE.Cleaning;
+
   /** Settle time between dependent commands; overridable so tests need no timers. */
   private commandSettleMs: number = COMMAND_SETTLE_MS;
 
@@ -439,6 +447,22 @@ export class VacuumDevice {
   }
 
   /**
+   * Run a command sequence in the background.
+   *
+   * Sequences that wait for a command to settle must not block the handler:
+   * Matterbridge applies its own cluster state only after the handler resolves,
+   * so awaiting here delays the command response and lets our state write land
+   * before Matterbridge's, leaving the two fighting over the attribute.
+   *
+   * @param {() => Promise<void>} sequence - The command sequence to run.
+   */
+  private runInBackground(sequence: () => Promise<void>): void {
+    sequence().catch((err: unknown) => {
+      this.log.error(`Ecovacs command sequence failed: ${String(err)}`);
+    });
+  }
+
+  /**
    * Resolve the single Matter operational state from the two independent inputs
    * the robot reports: the cleaning task (CleanReport) and the dock (ChargeState).
    *
@@ -457,7 +481,7 @@ export class VacuumDevice {
       this.cleanState === OP_STATE.Running || this.cleanState === OP_STATE.SeekingCharger || (this.cleanState === OP_STATE.Paused && this.chargeState !== OP_STATE.Charging);
 
     const resolved = cleanSideWins ? this.cleanState : this.chargeState;
-    const runMode = resolved === OP_STATE.Running ? RUN_MODE.Cleaning : RUN_MODE.Idle;
+    const runMode = resolved === OP_STATE.Running ? this.activeRunMode : RUN_MODE.Idle;
 
     this.setRvcState(runMode, resolved);
     this.setBatChargeState(this.batChargeState());
@@ -618,9 +642,13 @@ export class VacuumDevice {
       // the old advice to avoid stop-before-charge was based on the non-V2 stop,
       // which V2 firmware ignores; the pausing was caused by charge() itself.)
       if (this.vacbot) {
-        this.stopClean();
-        await delay(this.commandSettleMs);
-        this.vacbot?.charge();
+        this.runInBackground(async () => {
+          this.stopClean();
+          // Let the stop settle: a charge sent immediately after it is dropped
+          // and the robot stays where it is.
+          await delay(this.commandSettleMs);
+          this.vacbot?.charge();
+        });
       }
     });
 
@@ -648,8 +676,10 @@ export class VacuumDevice {
           this.scheduleApplyState();
           this.pauseResumeClean('resume');
         } else {
-          // Any other non-Idle mode (Cleaning=2, SpotCleaning=4, etc.) → start clean
-          await this.startClean();
+          // Any other non-Idle mode (Cleaning=2, SpotCleaning=4, etc.) → start clean,
+          // reporting back the mode the controller asked for.
+          this.activeRunMode = newMode;
+          this.runInBackground(() => this.startClean());
         }
       } else {
         // Clean mode changed — store for next clean, do not start
