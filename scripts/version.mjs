@@ -2,8 +2,14 @@
 /**
  * Stamp package.json with a prerelease version identifying the exact commit.
  *
- * Produces:  <baseVersion>-<tag>-<yyyymmdd>-<7charSha>
- * e.g.       0.1.1-dev-20260727-a1b2c3d
+ * Produces:  <baseVersion>-<tag>.<yyyymmddHHmm>.<7charSha>
+ * e.g.       0.2.1-dev.202607282045.a1b2c3d
+ *
+ * The parts are dot-separated so semver compares them as separate identifiers:
+ * the timestamp is numeric and therefore ordered chronologically. Joining them
+ * with hyphens instead makes the whole suffix one alphanumeric identifier
+ * compared character by character, so builds sort by commit hash — meaning a
+ * newer build can appear older than one it replaced.
  *
  * Used by `npm run npmPackDev` so every test tarball carries a distinct,
  * traceable version: Matterbridge keys plugins by name+version, so re-uploading
@@ -29,18 +35,16 @@ function usage() {
     `Usage: node scripts/version.mjs <${TAGS.join('|')}> [--dry-run]`,
     '',
     'Updates package.json version to:',
-    '  <baseVersion>-<tag>-<yyyymmdd>-<7charSha>',
+    '  <baseVersion>-<tag>.<yyyymmddHHmm>.<7charSha>',
     '',
     'Options:',
     '  --dry-run, -n   Print the next version but do not write package.json',
   ].join('\n');
 }
 
-function formatYyyymmdd(date) {
-  const year = String(date.getFullYear());
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}${month}${day}`;
+function formatTimestamp(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
 
 function getShortSha7(repoRoot) {
@@ -96,7 +100,7 @@ const packageJsonPath = path.join(repoRoot, 'package.json');
 
 const pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
 const currentVersion = pkg.version;
-const nextVersion = `${requirePlainSemver(currentVersion)}-${tag}-${formatYyyymmdd(new Date())}-${getShortSha7(repoRoot)}`;
+const nextVersion = `${requirePlainSemver(currentVersion)}-${tag}.${formatTimestamp(new Date())}.${getShortSha7(repoRoot)}`;
 
 if (dryRun) {
   console.log(`[dry-run] package.json version: ${currentVersion} -> ${nextVersion}`);
