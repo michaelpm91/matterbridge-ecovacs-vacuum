@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Room cleans now show as cleaning rather than "travelling to room".** The plugin never wrote `ServiceArea.currentArea`, so it kept Matterbridge's default while the controller had selected a different room; Apple Home compares the two and reports the robot as still on its way. The serviced area is now announced when a room clean starts, tracked from the robot's own reports, and cleared when it stops cleaning.
+- The library's internal error codes (negative, e.g. `-2 "Unhandled error"`) are no longer reported as device faults. They put the Matter endpoint into `Error`, which controllers show as an alert on an otherwise healthy vacuum mid-clean.
+
 - The run mode the controller asked for is reported back while cleaning. Apple Home requests `SpotCleaning` when rooms are selected; answering `Cleaning` made it treat the request as not having taken effect, so the vacuum never showed as cleaning.
 - Command sequences that wait for a settle interval now run in the background. Matterbridge applies its own cluster state only after the handler resolves, so awaiting in the handler delayed the command response by the settle time and let our state write land before Matterbridge's — the two then fought over the attribute.
 

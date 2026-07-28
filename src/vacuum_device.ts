@@ -155,6 +155,9 @@ export class VacuumDevice {
   /** Periodic keepalive poll to refresh state and maintain subscriptions */
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  /** Last-written ServiceArea currentArea — used to skip redundant setAttribute calls */
+  private lastCurrentArea: number | null | undefined = undefined;
+
   /** Last-written RVC state values — used to skip redundant setAttribute calls */
   private lastRunMode: number = -1;
   private lastOpState: number = -1;
@@ -421,7 +424,30 @@ export class VacuumDevice {
       this.applyState();
     });
 
+    this.vacbot.on('CurrentSpotAreas', (areas: string) => {
+      // The robot reports which Ecovacs spot area it is in; translate to the
+      // Matter area so the controller can tell cleaning from travelling.
+      const ecovacsId = String(areas ?? '')
+        .split(',')[0]
+        ?.trim();
+      if (!ecovacsId) return;
+      for (const [matterId, id] of this.spotAreaMap) {
+        if (id === ecovacsId) {
+          this.setCurrentArea(matterId);
+          return;
+        }
+      }
+    });
+
     this.vacbot.on('ErrorCode', (code: string) => {
+      // ecovacs-deebot reports its own internal failures with negative codes
+      // (e.g. -2 "Unhandled error"). Those are not robot faults, and surfacing
+      // them puts the Matter device into Error, which controllers show as an
+      // alert on an otherwise healthy vacuum.
+      if (Number(code) < 0) {
+        this.log.debug(`Ignoring library-internal error code ${code}`);
+        return;
+      }
       const rvcError = ECOVACS_TO_RVC_ERROR[code] ?? RVC_ERROR.UnableToCompleteOperation;
       if (rvcError === RVC_ERROR.NoError) {
         this.log.debug(`ErrorCode: ${code} (no error / transient)`);
@@ -485,6 +511,7 @@ export class VacuumDevice {
 
     this.setRvcState(runMode, resolved);
     this.setBatChargeState(this.batChargeState());
+    if (resolved !== OP_STATE.Running) this.setCurrentArea(null);
   }
 
   /**
@@ -549,6 +576,25 @@ export class VacuumDevice {
         this.log.debug(`setAttribute rvcOperationalState.operationalState error: ${String(err)}`);
       });
     }
+  }
+
+  /**
+   * Report which area the robot is servicing.
+   *
+   * Controllers compare this with SelectedAreas to decide whether the robot is
+   * cleaning the requested room or still on its way: Apple Home shows
+   * "travelling to room" for as long as CurrentArea is not the selected one, so
+   * leaving it at its default made a room clean never display as cleaning.
+   *
+   * @param {number | null} areaId - The Matter area being serviced, or null when none.
+   */
+  private setCurrentArea(areaId: number | null): void {
+    if (this.rvc === null || areaId === this.lastCurrentArea) return;
+    this.lastCurrentArea = areaId;
+    this.log.info(`ServiceArea currentArea → ${areaId ?? 'null'}`);
+    this.rvc.setAttribute('serviceArea', 'currentArea', areaId, this.log).catch((err: unknown) => {
+      this.log.debug(`setAttribute serviceArea.currentArea error: ${String(err)}`);
+    });
   }
 
   private setRvcError(errorId: number): void {
@@ -796,6 +842,7 @@ export class VacuumDevice {
   private startSpotAreaClean(ecovacsIds: string[]): void {
     switch (this.definition.spotAreaStrategy) {
       case 'freeClean': {
+        this.setCurrentArea(this.selectedAreaIds[0] ?? null);
         // freeClean value format: "cleanings,areaId" per room, separated by semicolons.
         // e.g. area 3 once → "1,3"; areas 3 and 5 once each → "1,3;1,5"
         // (Captured from real X2 app traffic; SpotArea_V2 / type='spotArea' is rejected by X2.)
@@ -810,6 +857,7 @@ export class VacuumDevice {
         break;
       }
       case 'SpotArea_V2':
+        this.setCurrentArea(this.selectedAreaIds[0] ?? null);
         this.log.info(`Starting spot area clean (SpotArea_V2): areas=[${ecovacsIds.join(',')}]`);
         this.vacbot.run('SpotArea_V2', ecovacsIds.join(','), 1);
         break;

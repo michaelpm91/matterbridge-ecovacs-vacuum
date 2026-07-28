@@ -183,6 +183,11 @@ describe('Matter integration', () => {
     expect(attr('rvcRunMode', 'currentMode')).toBe(RUN.SpotCleaning);
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
 
+    // Apple Home compares CurrentArea with SelectedAreas to tell "cleaning this
+    // room" from "travelling to it"; leaving CurrentArea at its default made a
+    // room clean show as travelling for the whole run.
+    expect(attr('serviceArea', 'currentArea')).toBe(2);
+
     // The robot's own report must not downgrade the mode to plain Cleaning
     eventHandlers['CleanReport']?.('spot_area');
     await flushAsync();
@@ -217,6 +222,28 @@ describe('Matter integration', () => {
     await flushAsync();
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Charging);
     expect(attr('rvcRunMode', 'currentMode')).toBe(RUN.Idle);
+  });
+
+  it('clears the serviced area when the robot stops cleaning', async () => {
+    await invoke('serviceArea', 'selectAreas', { newAreas: [1] });
+    await invoke('rvcRunMode', 'changeToMode', { newMode: RUN.SpotCleaning });
+    expect(attr('serviceArea', 'currentArea')).toBe(1);
+
+    eventHandlers['CleanReport']?.('idle');
+    eventHandlers['ChargeState']?.('charging');
+    await flushAsync();
+    expect(attr('serviceArea', 'currentArea')).toBeNull();
+  });
+
+  it("does not report the library's internal errors as a device fault", async () => {
+    // ecovacs-deebot signals its own failures with negative codes; surfacing
+    // them put the endpoint into Error, which controllers show as an alert.
+    eventHandlers['CleanReport']?.('auto');
+    await flushAsync();
+    eventHandlers['ErrorCode']?.('-2');
+    await flushAsync();
+    expect((attr('rvcOperationalState', 'operationalError') as { errorStateId: number }).errorStateId).toBe(0);
+    expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
   });
 
   it('does not let a mop-pad wash disturb the reported state', async () => {
