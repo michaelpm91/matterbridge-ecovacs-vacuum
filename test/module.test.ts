@@ -1440,6 +1440,22 @@ describe('Matterbridge Ecovacs Plugin', () => {
       expect(mockVacbot.run).not.toHaveBeenCalledWith('SpotArea_V2', expect.anything(), expect.anything());
     });
 
+    it('gives a room the same Matter area ID whichever order its details arrive in', async () => {
+      // Room details arrive as separate pushes, so their order varies between
+      // runs. Numbering by that order made one controller area mean two
+      // different rooms across restarts, silently re-pointing saved selections.
+      const idsFor = async (rooms: { id: string; name: string }[]): Promise<Record<string, number>> => {
+        const d = makeDevice(MODELS['e6ofmn']);
+        await d.createRvcDevice(rooms);
+        return Object.fromEntries([...d.spotAreaMap].map(([matterId, ecovacsId]: [number, string]) => [ecovacsId, matterId]));
+      };
+      const rooms = [
+        { id: '0', name: 'Kitchen' },
+        { id: '1', name: 'Hallway' },
+      ];
+      expect(await idsFor(rooms)).toEqual(await idsFor([...rooms].reverse()));
+    });
+
     it('falls back to the model family name when the account provides no nickname', () => {
       const d = makeDevice(DEFAULT_MODEL);
       expect(d.name).toBe('Generic Bot');

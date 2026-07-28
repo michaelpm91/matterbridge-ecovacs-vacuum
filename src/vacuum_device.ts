@@ -58,6 +58,13 @@ const KEEPALIVE_INTERVAL_MS = 90_000;
 const COMMAND_SETTLE_MS = 1_500;
 
 /**
+ * How long to wait for the robot to report which room it is in before assuming
+ * it has arrived. Only a fallback: models that report their position drive the
+ * area directly, which is what makes "travelling" accurate.
+ */
+const AREA_FALLBACK_MS = 90_000;
+
+/**
  * Resolve after the given delay.
  *
  * @param {number} ms - Milliseconds to wait.
@@ -65,6 +72,22 @@ const COMMAND_SETTLE_MS = 1_500;
  */
 function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+/**
+ * Derive a stable Matter area ID from an Ecovacs spot area ID.
+ *
+ * Ecovacs area IDs are small numeric strings tied to the robot's saved map, so
+ * they map directly (offset by one, since Matter area IDs start at 1). Anything
+ * unparseable falls back to the discovery position.
+ *
+ * @param {string} ecovacsId - The Ecovacs spot area ID.
+ * @param {number} index - Position in the discovered list, used as a fallback.
+ * @returns {number} The Matter area ID.
+ */
+function matterAreaId(ecovacsId: string, index: number): number {
+  const parsed = Number(ecovacsId);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed + 1 : index + 1;
 }
 
 /**
@@ -154,6 +177,9 @@ export class VacuumDevice {
 
   /** Periodic keepalive poll to refresh state and maintain subscriptions */
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+
+  /** Pending fallback that assumes arrival when the robot reports no position */
+  private areaFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Last-written ServiceArea currentArea — used to skip redundant setAttribute calls */
   private lastCurrentArea: number | null | undefined = undefined;
@@ -276,6 +302,7 @@ export class VacuumDevice {
    * so a subsequent attach() reuses it.
    */
   async detach(): Promise<void> {
+    this.clearAreaFallback();
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -424,19 +451,21 @@ export class VacuumDevice {
       this.applyState();
     });
 
+    this.vacbot.on('DeebotPosition', (position: { currentSpotAreaID?: string }) => {
+      // The library derives the room from the robot's coordinates; this is what
+      // tells us it has stopped travelling and started cleaning the room.
+      const id = position?.currentSpotAreaID;
+      if (!id || id === 'unknown') return;
+      this.reportAreaFromEcovacsId(id);
+    });
+
     this.vacbot.on('CurrentSpotAreas', (areas: string) => {
       // The robot reports which Ecovacs spot area it is in; translate to the
       // Matter area so the controller can tell cleaning from travelling.
       const ecovacsId = String(areas ?? '')
         .split(',')[0]
         ?.trim();
-      if (!ecovacsId) return;
-      for (const [matterId, id] of this.spotAreaMap) {
-        if (id === ecovacsId) {
-          this.setCurrentArea(matterId);
-          return;
-        }
-      }
+      if (ecovacsId) this.reportAreaFromEcovacsId(ecovacsId);
     });
 
     this.vacbot.on('ErrorCode', (code: string) => {
@@ -597,6 +626,47 @@ export class VacuumDevice {
     });
   }
 
+  /**
+   * Report the area matching an Ecovacs spot area ID, if we know it.
+   *
+   * @param {string} ecovacsId - The Ecovacs spot area the robot reports being in.
+   */
+  private reportAreaFromEcovacsId(ecovacsId: string): void {
+    for (const [matterId, id] of this.spotAreaMap) {
+      if (id === ecovacsId) {
+        this.clearAreaFallback();
+        this.setCurrentArea(matterId);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Assume the robot reached the requested room if it never reports a position.
+   *
+   * Position reporting depends on the robot having usable map data; without this
+   * a clean would sit on "travelling" for its whole duration on models that stay
+   * quiet.
+   */
+  private startAreaFallback(): void {
+    this.clearAreaFallback();
+    const target = this.selectedAreaIds[0];
+    if (target === undefined) return;
+    this.areaFallbackTimer = setTimeout(() => {
+      this.areaFallbackTimer = null;
+      if (this.cleanState !== OP_STATE.Running || this.lastCurrentArea !== null) return;
+      this.log.debug(`No position reported after ${AREA_FALLBACK_MS / 1000}s — assuming the robot reached area ${target}`);
+      this.setCurrentArea(target);
+    }, AREA_FALLBACK_MS);
+  }
+
+  private clearAreaFallback(): void {
+    if (this.areaFallbackTimer) {
+      clearTimeout(this.areaFallbackTimer);
+      this.areaFallbackTimer = null;
+    }
+  }
+
   private setRvcError(errorId: number): void {
     if (this.rvc === null) return;
     if (errorId === this.lastErrorId) return;
@@ -622,7 +692,12 @@ export class VacuumDevice {
     // areaId is 1-based; spotAreaMap translates back to Ecovacs IDs at clean time.
     this.spotAreaMap.clear();
     const supportedAreas = rooms.map((room, index) => {
-      const areaId = index + 1;
+      // Derive the Matter area ID from the Ecovacs one so it survives restarts.
+      // Numbering by discovery order instead is a race: room details arrive as
+      // separate pushes, so the same room can land at a different index on the
+      // next run — observed live, where one HomeKit area meant two different
+      // rooms across restarts, silently re-pointing saved selections.
+      const areaId = matterAreaId(room.id, index);
       this.spotAreaMap.set(areaId, room.id);
       return {
         areaId,
@@ -802,6 +877,10 @@ export class VacuumDevice {
 
   private async startClean(): Promise<void> {
     if (!this.vacbot) return;
+    // Until the robot reports which room it is in, it is on its way there.
+    // Controllers use exactly this to tell travelling from cleaning.
+    this.setCurrentArea(null);
+    this.startAreaFallback();
     // Report Running straight away; the robot confirms via CleanReport. Deferred
     // because startClean runs inside the changeToMode command transaction.
     this.cleanState = OP_STATE.Running;
@@ -842,7 +921,6 @@ export class VacuumDevice {
   private startSpotAreaClean(ecovacsIds: string[]): void {
     switch (this.definition.spotAreaStrategy) {
       case 'freeClean': {
-        this.setCurrentArea(this.selectedAreaIds[0] ?? null);
         // freeClean value format: "cleanings,areaId" per room, separated by semicolons.
         // e.g. area 3 once → "1,3"; areas 3 and 5 once each → "1,3;1,5"
         // (Captured from real X2 app traffic; SpotArea_V2 / type='spotArea' is rejected by X2.)
@@ -857,7 +935,6 @@ export class VacuumDevice {
         break;
       }
       case 'SpotArea_V2':
-        this.setCurrentArea(this.selectedAreaIds[0] ?? null);
         this.log.info(`Starting spot area clean (SpotArea_V2): areas=[${ecovacsIds.join(',')}]`);
         this.vacbot.run('SpotArea_V2', ecovacsIds.join(','), 1);
         break;

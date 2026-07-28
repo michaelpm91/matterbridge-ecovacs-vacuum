@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Matter area IDs are now derived from the Ecovacs area rather than discovery order.** Room details arrive as separate pushes, so their order varies between runs — observed live, where the same controller area meant two different rooms across restarts. Selections made in a controller (including saved automations and scenes) now keep pointing at the room they were made for.
+- `ServiceArea.currentArea` reflects where the robot actually is rather than where it was sent, so a controller can distinguish travelling to a room from cleaning it. It is driven by the robot's reported position, with a 90-second fallback that assumes arrival for models that never report one.
+
 - **Room cleans now show as cleaning rather than "travelling to room".** The plugin never wrote `ServiceArea.currentArea`, so it kept Matterbridge's default while the controller had selected a different room; Apple Home compares the two and reports the robot as still on its way. The serviced area is now announced when a room clean starts, tracked from the robot's own reports, and cleared when it stops cleaning.
 - The library's internal error codes (negative, e.g. `-2 "Unhandled error"`) are no longer reported as device faults. They put the Matter endpoint into `Error`, which controllers show as an alert on an otherwise healthy vacuum mid-clean.
 

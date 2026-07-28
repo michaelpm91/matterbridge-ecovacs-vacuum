@@ -151,6 +151,9 @@ describe('Matter integration', () => {
     expect(rvc.deviceName).toBe('Deedee');
     const areas = attr('serviceArea', 'supportedAreas') as { areaId: number; areaInfo: { locationInfo: { locationName: string } } }[];
     expect(areas.map((a) => a.areaInfo.locationInfo.locationName)).toEqual(['Room 0', 'Room 1']);
+    // Area IDs come from the Ecovacs area, not the order the details arrived in,
+    // so a controller's saved selection keeps meaning the same room.
+    expect(areas.map((a) => a.areaId)).toEqual([1, 2]);
   });
 
   it('starts a clean and settles on Cleaning/Running', async () => {
@@ -184,8 +187,13 @@ describe('Matter integration', () => {
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
 
     // Apple Home compares CurrentArea with SelectedAreas to tell "cleaning this
-    // room" from "travelling to it"; leaving CurrentArea at its default made a
-    // room clean show as travelling for the whole run.
+    // room" from "travelling to it". The robot has not reported arriving yet, so
+    // it is genuinely still travelling.
+    expect(attr('serviceArea', 'currentArea')).toBeNull();
+
+    // Once it reports the room it is in, that becomes the serviced area
+    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '1' });
+    await flushAsync();
     expect(attr('serviceArea', 'currentArea')).toBe(2);
 
     // The robot's own report must not downgrade the mode to plain Cleaning
@@ -227,6 +235,8 @@ describe('Matter integration', () => {
   it('clears the serviced area when the robot stops cleaning', async () => {
     await invoke('serviceArea', 'selectAreas', { newAreas: [1] });
     await invoke('rvcRunMode', 'changeToMode', { newMode: RUN.SpotCleaning });
+    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '0' });
+    await flushAsync();
     expect(attr('serviceArea', 'currentArea')).toBe(1);
 
     eventHandlers['CleanReport']?.('idle');
