@@ -117,7 +117,12 @@ npm run npmPack      # plain 0.1.1.tgz — for release candidates
 
 Both build a production tarball (prod-only dependencies, shrinkwrapped), then restore your dev setup. Prefer `npmPackDev` for iterative testing: Matterbridge keys plugins by name+version, so re-uploading the same version risks testing stale code, and the embedded SHA tells you exactly which commit is running.
 
-The Jest suite mocks the `ecovacs-deebot` library completely — no robot or account needed.
+Two Jest suites, both mocking `ecovacs-deebot` completely — no robot or account needed:
+
+- `test/module.test.ts` — unit tests calling the platform and device directly.
+- `test/integration.test.ts` — hosts the plugin on a **real Matterbridge `ServerNode`** (via `matterbridge/jestutils`) and drives it through the Matter cluster servers, the same path a controller such as Apple Home takes. This covers the interaction between the plugin and Matterbridge's own cluster servers, which unit tests cannot see.
+
+Commands there are invoked via `endpoint.act()`, which acquires behaviour locks asynchronously; a real controller arrives through the protocol layer, which acquires them synchronously. Faults specific to that locking path therefore still need a commissioned controller (a matter.js `ClientNode`, or a real one such as Apple Home).
 
 ## Acknowledgements
 
