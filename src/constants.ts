@@ -167,6 +167,14 @@ const CLEAN_MODE_LABEL: Record<CleanModeKey, string> = {
   mopAfterVacuum: 'Mop after Vacuum',
 };
 
+/**
+ * One tag set per cleaning type.
+ *
+ * Adding Vacuum+Mop to `mopAfterVacuum` was tried to coax Apple Home into
+ * rendering it: it did not make the mode appear, and it broke the speed picker,
+ * so the mode keeps only its own tag. Two entries sharing an identical
+ * recognised tag set appears to be what confuses the controller's grouping.
+ */
 const CLEAN_MODE_TAGS: Record<CleanModeKey, number[]> = {
   vacuum: [MODE_TAG.Vacuum],
   mop: [MODE_TAG.Mop],
