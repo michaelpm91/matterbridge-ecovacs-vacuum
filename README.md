@@ -111,11 +111,13 @@ npm run lint
 ### Packing a tarball for testing
 
 ```bash
-npm run npmPackDev   # 0.1.1-dev-<yyyymmdd>-<sha7>.tgz — stamped with the current commit
-npm run npmPack      # plain 0.1.1.tgz — for release candidates
+npm run npmPackDev   # 0.2.0-dev-<yyyymmdd>-<sha7>.tgz — stamped with the current commit
+npm run npmPack      # plain 0.2.0.tgz — for a release
 ```
 
 Both build a production tarball (prod-only dependencies, shrinkwrapped), then restore your dev setup. Prefer `npmPackDev` for iterative testing: Matterbridge keys plugins by name+version, so re-uploading the same version risks testing stale code, and the embedded SHA tells you exactly which commit is running.
+
+**Bump the base version when you start work toward a release, not when you publish it.** A dev build is a _prerelease of its base_, so `0.2.0-dev-…` sorts below `0.2.0` and above `0.1.x` — which is what you want while working toward 0.2.0. Leaving the base at the last released version instead makes every test build appear older than a release you have already shipped.
 
 Two Jest suites, both mocking `ecovacs-deebot` completely — no robot or account needed:
 

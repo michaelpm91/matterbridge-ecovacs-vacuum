@@ -1,6 +1,6 @@
 {
   "name": "matterbridge-ecovacs",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Matterbridge plugin for Ecovacs robot vacuums (Deebot, yeedi)",
   "author": "michaelpm91 <michaelpm91@googlemail.com>",
   "homepage": "https://github.com/michaelpm91/matterbridge-ecovacs#readme",
