@@ -220,8 +220,15 @@ describe('Matterbridge Ecovacs Plugin', () => {
     mockApi.user_access_token = 'test-token';
     // Replace the platform's real on-disk storage context with the deterministic mock
     if (instance) (instance as any).context = mockContext;
-    // Command settle delays are real timers; tests drive commands back-to-back
-    if (device()) device().commandSettleMs = 0;
+    const d = device();
+    if (d) {
+      // Command settle delays are real timers; tests drive commands back-to-back
+      d.commandSettleMs = 0;
+      // These tests build endpoints without a server node, so they never reach
+      // the 'active' lifecycle state the plugin requires before writing (which
+      // is what stops it writing to endpoints Matterbridge has torn down).
+      if (d.rvc) Object.defineProperty(d.rvc, 'construction', { value: { status: 'active' }, configurable: true });
+    }
   });
 
   afterEach(() => {

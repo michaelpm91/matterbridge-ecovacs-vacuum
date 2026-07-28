@@ -178,6 +178,21 @@ export class VacuumDevice {
   /** Periodic keepalive poll to refresh state and maintain subscriptions */
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  /**
+   * Drop the cached view of what the endpoint currently reports.
+   *
+   * The de-duplication below compares against the last value written; a new
+   * endpoint starts from its own defaults, so without this the first update
+   * after a rebuild would be skipped as redundant.
+   */
+  private resetReportedState(): void {
+    this.lastRunMode = -1;
+    this.lastOpState = -1;
+    this.lastErrorId = -1;
+    this.lastBatChargeState = -1;
+    this.lastCurrentArea = undefined;
+  }
+
   /** Pending fallback that assumes arrival when the robot reports no position */
   private areaFallbackTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -220,6 +235,20 @@ export class VacuumDevice {
   ) {
     this.currentCleanMode = CLEAN_MODE_NUMBER[definition.cleanModes[0] ?? 'vacuum'];
     this.speedLevelMap = buildSpeedLevelMap(definition);
+  }
+
+  /**
+   * Whether the Matter endpoint is present and usable.
+   *
+   * Matterbridge destroys endpoints when a plugin is restarted or updated, but
+   * the robot keeps pushing events, so a stale reference means every update
+   * fails with "endpoint is in the inactive state". Treating a dead endpoint as
+   * absent lets the next connection build a fresh one instead.
+   *
+   * @returns {RoboticVacuumCleaner | null} The endpoint, or null when it cannot be written to.
+   */
+  private get liveRvc(): RoboticVacuumCleaner | null {
+    return this.rvc !== null && this.rvc.construction.status === 'active' ? this.rvc : null;
   }
 
   /**
@@ -270,8 +299,14 @@ export class VacuumDevice {
       try {
         this.setupEventHandlers();
 
-        // Create and register the Matter endpoint only once — reconnects reuse it.
-        if (this.rvc === null) {
+        // Reconnects reuse the endpoint, but a plugin restart or update destroys
+        // it — rebuild in that case, otherwise the robot silently never appears.
+        if (this.liveRvc === null) {
+          if (this.rvc !== null) {
+            this.log.info('Matter endpoint is no longer active — rebuilding it');
+            this.rvc = null;
+            this.resetReportedState();
+          }
           const rooms = await this.fetchSpotAreas();
           await this.createRvcDevice(rooms);
         }
@@ -406,13 +441,14 @@ export class VacuumDevice {
 
   private setupEventHandlers(): void {
     this.vacbot.on('BatteryInfo', (battery: number) => {
-      if (this.rvc === null) return;
+      const rvc = this.liveRvc;
+      if (rvc === null) return;
       const pct = Math.round(battery);
       const level = pct > 20 ? BAT_CHARGE_LEVEL.Ok : pct > 5 ? BAT_CHARGE_LEVEL.Warning : BAT_CHARGE_LEVEL.Critical;
-      this.rvc.setAttribute('powerSource', 'batPercentRemaining', pct * 2, this.log).catch((err: unknown) => {
+      rvc.setAttribute('powerSource', 'batPercentRemaining', pct * 2, this.log).catch((err: unknown) => {
         this.log.debug(`setAttribute batPercentRemaining error: ${String(err)}`);
       });
-      this.rvc.setAttribute('powerSource', 'batChargeLevel', level, this.log).catch((err: unknown) => {
+      rvc.setAttribute('powerSource', 'batChargeLevel', level, this.log).catch((err: unknown) => {
         this.log.debug(`setAttribute batChargeLevel error: ${String(err)}`);
       });
       this.lastBatteryPct = pct;
@@ -589,19 +625,20 @@ export class VacuumDevice {
   }
 
   private setRvcState(runMode: number, opState: number): void {
-    if (this.rvc === null) return;
+    const rvc = this.liveRvc;
+    if (rvc === null) return;
     if (runMode !== this.lastRunMode || opState !== this.lastOpState) {
       this.log.info(`RVC state → runMode=${runMode} opState=0x${opState.toString(16).padStart(2, '0')}`);
     }
     if (runMode !== this.lastRunMode) {
       this.lastRunMode = runMode;
-      this.rvc.setAttribute('rvcRunMode', 'currentMode', runMode, this.log).catch((err: unknown) => {
+      rvc.setAttribute('rvcRunMode', 'currentMode', runMode, this.log).catch((err: unknown) => {
         this.log.debug(`setAttribute rvcRunMode.currentMode error: ${String(err)}`);
       });
     }
     if (opState !== this.lastOpState) {
       this.lastOpState = opState;
-      this.rvc.setAttribute('rvcOperationalState', 'operationalState', opState, this.log).catch((err: unknown) => {
+      rvc.setAttribute('rvcOperationalState', 'operationalState', opState, this.log).catch((err: unknown) => {
         this.log.debug(`setAttribute rvcOperationalState.operationalState error: ${String(err)}`);
       });
     }
@@ -618,10 +655,11 @@ export class VacuumDevice {
    * @param {number | null} areaId - The Matter area being serviced, or null when none.
    */
   private setCurrentArea(areaId: number | null): void {
-    if (this.rvc === null || areaId === this.lastCurrentArea) return;
+    const rvc = this.liveRvc;
+    if (rvc === null || areaId === this.lastCurrentArea) return;
     this.lastCurrentArea = areaId;
     this.log.info(`ServiceArea currentArea → ${areaId ?? 'null'}`);
-    this.rvc.setAttribute('serviceArea', 'currentArea', areaId, this.log).catch((err: unknown) => {
+    rvc.setAttribute('serviceArea', 'currentArea', areaId, this.log).catch((err: unknown) => {
       this.log.debug(`setAttribute serviceArea.currentArea error: ${String(err)}`);
     });
   }
@@ -668,19 +706,21 @@ export class VacuumDevice {
   }
 
   private setRvcError(errorId: number): void {
-    if (this.rvc === null) return;
+    const rvc = this.liveRvc;
+    if (rvc === null) return;
     if (errorId === this.lastErrorId) return;
     this.lastErrorId = errorId;
-    this.rvc.setAttribute('rvcOperationalState', 'operationalError', { errorStateId: errorId }, this.log).catch((err: unknown) => {
+    rvc.setAttribute('rvcOperationalState', 'operationalError', { errorStateId: errorId }, this.log).catch((err: unknown) => {
       this.log.debug(`setAttribute rvcOperationalState.operationalError error: ${String(err)}`);
     });
   }
 
   private setBatChargeState(state: number): void {
-    if (this.rvc === null) return;
+    const rvc = this.liveRvc;
+    if (rvc === null) return;
     if (state === this.lastBatChargeState) return;
     this.lastBatChargeState = state;
-    this.rvc.setAttribute('powerSource', 'batChargeState', state, this.log).catch((err: unknown) => {
+    rvc.setAttribute('powerSource', 'batChargeState', state, this.log).catch((err: unknown) => {
       this.log.debug(`setAttribute powerSource.batChargeState error: ${String(err)}`);
     });
   }
@@ -723,6 +763,10 @@ export class VacuumDevice {
       undefined, // operationalStateList (default: full list)
       supportedAreas.length > 0 ? supportedAreas : undefined, // real rooms or Matterbridge defaults
       [], // selectedAreas
+      // currentArea must name one of the supported areas: the cluster refuses to
+      // initialise otherwise, and Matterbridge's default of 1 is not a valid area
+      // once IDs come from the robot's own numbering (which need not start at 0).
+      supportedAreas[0]?.areaId,
     );
 
     // ── Command handlers (Matter → Ecovacs) ────────────────────────────────────

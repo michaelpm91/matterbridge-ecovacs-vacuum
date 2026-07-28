@@ -47,7 +47,10 @@ const mockVacbot = {
   }),
   run: jest.fn((command: string, ...args: unknown[]) => {
     if (command === 'GetMaps') eventHandlers['CurrentMapMID']?.('map-1');
-    else if (command === 'GetSpotAreas') eventHandlers['MapSpotAreas']?.({ mapSpotAreas: [{ mapSpotAreaID: '0' }, { mapSpotAreaID: '1' }] });
+    // Real robots number their areas from 1, so Matter IDs start at 2 — which is
+    // what caught the ServiceArea cluster refusing to initialise when currentArea
+    // was left at Matterbridge's default of 1.
+    else if (command === 'GetSpotAreas') eventHandlers['MapSpotAreas']?.({ mapSpotAreas: [{ mapSpotAreaID: '1' }, { mapSpotAreaID: '2' }] });
     else if (command === 'GetSpotAreaInfo') eventHandlers['MapSpotAreaInfo']?.({ mapSpotAreaID: String(args[1]), mapSpotAreaName: `Room ${String(args[1])}` });
   }),
   pause: jest.fn(),
@@ -150,10 +153,14 @@ describe('Matter integration', () => {
     expect(rvc).toBeDefined();
     expect(rvc.deviceName).toBe('Deedee');
     const areas = attr('serviceArea', 'supportedAreas') as { areaId: number; areaInfo: { locationInfo: { locationName: string } } }[];
-    expect(areas.map((a) => a.areaInfo.locationInfo.locationName)).toEqual(['Room 0', 'Room 1']);
+    expect(areas.map((a) => a.areaInfo.locationInfo.locationName)).toEqual(['Room 1', 'Room 2']);
     // Area IDs come from the Ecovacs area, not the order the details arrived in,
     // so a controller's saved selection keeps meaning the same room.
-    expect(areas.map((a) => a.areaId)).toEqual([1, 2]);
+    expect(areas.map((a) => a.areaId)).toEqual([2, 3]);
+    // The endpoint must actually be usable: a currentArea outside supportedAreas
+    // makes the ServiceArea cluster refuse to initialise, and every later write
+    // then fails with "endpoint is in the inactive state".
+    expect(rvc.construction.status).toBe('active');
   });
 
   it('starts a clean and settles on Cleaning/Running', async () => {
@@ -173,13 +180,13 @@ describe('Matter integration', () => {
     // controller sees every intermediate value, and it was the plugin writing
     // Cleaning over Matterbridge's SpotCleaning that made Home give up.
     const writes = jest.spyOn(rvc, 'setAttribute');
-    await invoke('serviceArea', 'selectAreas', { newAreas: [2] });
+    await invoke('serviceArea', 'selectAreas', { newAreas: [3] });
     await invoke('rvcRunMode', 'changeToMode', { newMode: RUN.SpotCleaning });
     expect(writes).not.toHaveBeenCalledWith('rvcRunMode', 'currentMode', RUN.Cleaning, expect.anything());
 
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', {
       act: 'start',
-      content: { count: 1, donotClean: '', type: 'freeClean', value: '1,1' },
+      content: { count: 1, donotClean: '', type: 'freeClean', value: '1,2' },
       mode: '',
       router: 'plan',
     });
@@ -192,9 +199,9 @@ describe('Matter integration', () => {
     expect(attr('serviceArea', 'currentArea')).toBeNull();
 
     // Once it reports the room it is in, that becomes the serviced area
-    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '1' });
+    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '2' });
     await flushAsync();
-    expect(attr('serviceArea', 'currentArea')).toBe(2);
+    expect(attr('serviceArea', 'currentArea')).toBe(3);
 
     // The robot's own report must not downgrade the mode to plain Cleaning
     eventHandlers['CleanReport']?.('spot_area');
@@ -233,11 +240,11 @@ describe('Matter integration', () => {
   });
 
   it('clears the serviced area when the robot stops cleaning', async () => {
-    await invoke('serviceArea', 'selectAreas', { newAreas: [1] });
+    await invoke('serviceArea', 'selectAreas', { newAreas: [2] });
     await invoke('rvcRunMode', 'changeToMode', { newMode: RUN.SpotCleaning });
-    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '0' });
+    eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '1' });
     await flushAsync();
-    expect(attr('serviceArea', 'currentArea')).toBe(1);
+    expect(attr('serviceArea', 'currentArea')).toBe(2);
 
     eventHandlers['CleanReport']?.('idle');
     eventHandlers['ChargeState']?.('charging');

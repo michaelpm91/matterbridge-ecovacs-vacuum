@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fixed the device failing to appear after the area-ID change.** `ServiceArea.currentArea` must name one of the supported areas, and Matterbridge defaults it to `1` — which stopped being a valid area once IDs came from the robot's own numbering (rooms numbered from 1 produce Matter IDs from 2). The cluster then refused to initialise, so the endpoint stayed inactive, the robot vanished from the bridge, and every update logged "endpoint is in the inactive state".
+- The plugin no longer writes to an endpoint Matterbridge has torn down, and rebuilds it on the next connection instead. Previously a plugin restart or update left the robot pushing updates at a dead endpoint forever.
+
 - **Matter area IDs are now derived from the Ecovacs area rather than discovery order.** Room details arrive as separate pushes, so their order varies between runs — observed live, where the same controller area meant two different rooms across restarts. Selections made in a controller (including saved automations and scenes) now keep pointing at the room they were made for.
 - `ServiceArea.currentArea` reflects where the robot actually is rather than where it was sent, so a controller can distinguish travelling to a room from cleaning it. It is driven by the robot's reported position, with a 90-second fallback that assumes arrival for models that never report one.
 
