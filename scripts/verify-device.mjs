@@ -16,7 +16,10 @@
  *   4. stock login retry           → confirm the device ID is now accepted
  *
  * Usage (installed):
- *   npx matterbridge-ecovacs-vacuum-verify <username> <password> [country] [continent] [--device-id ID]
+ *   matterbridge-ecovacs-vacuum-verify <username> <password> [country] [continent] [--device-id ID]
+ * Usage (any machine, without installing):
+ *   npx -p matterbridge-ecovacs-vacuum matterbridge-ecovacs-vacuum-verify <username> <password> ...
+ *   (-p is required: the bin name differs from the package name, so npx cannot resolve it alone)
  * Usage (from a repo checkout):
  *   node scripts/verify-device.mjs <username> <password> [country] [continent] [--device-id ID]
  *   ECOVACS_USERNAME=... ECOVACS_PASSWORD=... node scripts/verify-device.mjs [country] [continent]

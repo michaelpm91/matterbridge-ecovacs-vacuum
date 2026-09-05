@@ -57,12 +57,18 @@ Generated Ecovacs device ID: b03d846d… (from hostname 'homeassistant', now per
 Verify that ID once, then restart the plugin:
 
 ```bash
-npx matterbridge-ecovacs-vacuum-verify <email> <password> <country> <continent> --device-id <the logged id>
+matterbridge-ecovacs-vacuum-verify <email> <password> <country> <continent> --device-id <the logged id>
 ```
 
 Ecovacs emails a code to your account address; enter it at the prompt and the command confirms with a real login.
 
-**The verification does not have to run on the Matterbridge host.** This matters when Matterbridge runs somewhere without a convenient shell (a Home Assistant VM, a container): read the device ID from the plugin log, verify it from your laptop, then paste it into the plugin's `deviceId` config field so the ID stays pinned to the verified one.
+**The verification does not have to run on the Matterbridge host.** This matters when Matterbridge runs somewhere without a convenient shell (a Home Assistant VM, a container): read the device ID from the plugin log, verify it from your laptop, then paste it into the plugin's `deviceId` config field so the ID stays pinned to the verified one. On a machine without the plugin installed, fetch it with `npx`:
+
+```bash
+npx -p matterbridge-ecovacs-vacuum matterbridge-ecovacs-vacuum-verify <email> <password> <country> <continent> --device-id <the logged id>
+```
+
+(`-p` is required: the command name differs from the package name, so a bare `npx matterbridge-ecovacs-vacuum-verify` would look for a package that doesn't exist.)
 
 The plugin persists a generated device ID, so restarts and hostname changes won't silently invalidate your verification. Ecovacs may still demand re-verification occasionally — it was observed after many logins from one device ID in a short window (which is why the plugin caches its session; see below).
 

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The device-verification command is documented as the bare `matterbridge-ecovacs-vacuum-verify` rather than `npx matterbridge-ecovacs-vacuum-verify`. `npx` resolves a bare command name to a package of that name, and no such package exists — so the documented form failed on exactly the off-host machine the `--device-id` flag exists to serve. Running it elsewhere needs `npx -p matterbridge-ecovacs-vacuum`, which is now spelled out.
+
 - **Renamed to `matterbridge-ecovacs-vacuum`.** `matterbridge-ecovacs` is taken on npm by an unrelated plugin (bubez81's), and Matterbridge installs plugins by npm package name, so the two could not coexist. The verification CLI is now `matterbridge-ecovacs-vacuum-verify` and the config file `matterbridge-ecovacs-vacuum.config.json`.
 
 - **Fixed the device failing to appear after the area-ID change.** `ServiceArea.currentArea` must name one of the supported areas, and Matterbridge defaults it to `1` — which stopped being a valid area once IDs came from the robot's own numbering (rooms numbered from 1 produce Matter IDs from 2). The cluster then refused to initialise, so the endpoint stayed inactive, the robot vanished from the bridge, and every update logged "endpoint is in the inactive state".
