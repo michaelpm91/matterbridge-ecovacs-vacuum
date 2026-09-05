@@ -1,9 +1,9 @@
 {
-  "name": "matterbridge-ecovacs",
+  "name": "matterbridge-ecovacs-vacuum",
   "version": "0.2.1",
   "description": "Matterbridge plugin for Ecovacs robot vacuums (Deebot, yeedi)",
   "author": "michaelpm91 <michaelpm91@googlemail.com>",
-  "homepage": "https://github.com/michaelpm91/matterbridge-ecovacs#readme",
+  "homepage": "https://github.com/michaelpm91/matterbridge-ecovacs-vacuum#readme",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/module.js",
@@ -19,10 +19,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/michaelpm91/matterbridge-ecovacs.git"
+    "url": "git+https://github.com/michaelpm91/matterbridge-ecovacs-vacuum.git"
   },
   "bugs": {
-    "url": "https://github.com/michaelpm91/matterbridge-ecovacs/issues"
+    "url": "https://github.com/michaelpm91/matterbridge-ecovacs-vacuum/issues"
   },
   "keywords": [
     "matterbridge",
@@ -111,6 +111,6 @@
     "@eslint/js": "10.0.1"
   },
   "bin": {
-    "matterbridge-ecovacs-verify": "scripts/verify-device.mjs"
+    "matterbridge-ecovacs-vacuum-verify": "scripts/verify-device.mjs"
   }
 }

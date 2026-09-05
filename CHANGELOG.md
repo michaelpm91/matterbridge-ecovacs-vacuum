@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Renamed to `matterbridge-ecovacs-vacuum`.** `matterbridge-ecovacs` is taken on npm by an unrelated plugin (bubez81's), and Matterbridge installs plugins by npm package name, so the two could not coexist. The verification CLI is now `matterbridge-ecovacs-vacuum-verify` and the config file `matterbridge-ecovacs-vacuum.config.json`.
+
 - **Fixed the device failing to appear after the area-ID change.** `ServiceArea.currentArea` must name one of the supported areas, and Matterbridge defaults it to `1` — which stopped being a valid area once IDs came from the robot's own numbering (rooms numbered from 1 produce Matter IDs from 2). The cluster then refused to initialise, so the endpoint stayed inactive, the robot vanished from the bridge, and every update logged "endpoint is in the inactive state".
 - The plugin no longer writes to an endpoint Matterbridge has torn down, and rebuilds it on the next connection instead. Previously a plugin restart or update left the robot pushing updates at a dead endpoint forever.
 
@@ -40,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recognise the CleanReport values a run started from the Ecovacs app reports — `entrust` (AI clean), `qcClean`, `singlePoint`, `move`, `comeClean`, `area`, plus `goCharging`/`slot_charging`. Previously an app-initiated clean showed as Docked in the controller while the robot was out working.
 
 - Configurable, persisted Ecovacs client **device ID** (`deviceId` config field). The plugin logs the ID it uses on every start, persists a generated one so restarts/hostname changes cannot silently invalidate Ecovacs device verification, and prefers an explicit config value. Error 1013 now logs the exact verification command to run.
-- `matterbridge-ecovacs-verify` CLI (`bin`) — the device verification is now part of the published package instead of a repo-only script, and takes `--device-id ID` so verification can be performed from any machine on behalf of the Matterbridge host (e.g. a Home Assistant VM).
+- `matterbridge-ecovacs-vacuum-verify` CLI (`bin`) — the device verification is now part of the published package instead of a repo-only script, and takes `--device-id ID` so verification can be performed from any machine on behalf of the Matterbridge host (e.g. a Home Assistant VM).
 - Ecovacs session caching: the access token is persisted in the plugin storage and reused across Matterbridge restarts (~6.5-day trust window, validated against the API on start, invalidated when the account, country, or hostname changes). Avoids a fresh login every restart — Ecovacs re-triggers device verification (error 1013) when it sees too many logins from one device ID.
 - `scripts/verify-device.mjs` — one-time Ecovacs device verification (login error 1013). Since ~2026-07-14 Ecovacs requires each API client device ID to complete an email verification once; this ports the flow from DeebotUniverse/client.py PR #1706.
 - Work-mode and sweep-mode commands in the interactive test console (`wm`, `wm0`–`wm3`, `sm0`, `sm1`) and a `--device N` selector in both debug scripts.

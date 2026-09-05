@@ -1,4 +1,4 @@
-# matterbridge-ecovacs
+# matterbridge-ecovacs-vacuum
 
 [Matterbridge](https://github.com/Luligu/matterbridge) plugin that exposes Ecovacs robot vacuums (Deebot, yeedi) as Matter **Robotic Vacuum Cleaner** devices — so you can control them from Apple Home (HomeKit), Alexa, Google Home, or SmartThings.
 
@@ -20,15 +20,15 @@
 | Deebot X2 / X2 Omni / X2 Combo / X2 Pro Omni | `e6ofmn` (+ aliases) | ✅ Verified on X2 Omni                                                                                         |
 | Other Deebot / yeedi models                  | any                  | ⚠️ Default profile: basic vacuum control (start/stop/dock, speeds); no mop control or room cleaning guarantees |
 
-Robots with an unrecognised device class fall back to a conservative 950-type profile and log a warning. If that's your robot, please [open an issue](https://github.com/michaelpm91/matterbridge-ecovacs/issues) with the logged device class — adding a model is usually a small, declarative change (see below).
+Robots with an unrecognised device class fall back to a conservative 950-type profile and log a warning. If that's your robot, please [open an issue](https://github.com/michaelpm91/matterbridge-ecovacs-vacuum/issues) with the logged device class — adding a model is usually a small, declarative change (see below).
 
 ## Installation
 
-Install via the Matterbridge frontend (search for `matterbridge-ecovacs`), or manually:
+Install via the Matterbridge frontend (search for `matterbridge-ecovacs-vacuum`), or manually:
 
 ```bash
-npm install -g matterbridge-ecovacs
-matterbridge -add matterbridge-ecovacs
+npm install -g matterbridge-ecovacs-vacuum
+matterbridge -add matterbridge-ecovacs-vacuum
 ```
 
 ## Configuration
@@ -57,7 +57,7 @@ Generated Ecovacs device ID: b03d846d… (from hostname 'homeassistant', now per
 Verify that ID once, then restart the plugin:
 
 ```bash
-npx matterbridge-ecovacs-verify <email> <password> <country> <continent> --device-id <the logged id>
+npx matterbridge-ecovacs-vacuum-verify <email> <password> <country> <continent> --device-id <the logged id>
 ```
 
 Ecovacs emails a code to your account address; enter it at the prompt and the command confirms with a real login.

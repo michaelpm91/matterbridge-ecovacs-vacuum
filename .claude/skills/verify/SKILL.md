@@ -3,7 +3,7 @@ name: verify
 description: Run this plugin under a real, isolated Matterbridge instance and observe its runtime behaviour (plugin load, onStart, Ecovacs cloud connection).
 ---
 
-# Verifying matterbridge-ecovacs
+# Verifying matterbridge-ecovacs-vacuum
 
 The jest suite mocks `ecovacs-deebot` entirely — runtime verification means
 loading the plugin into a **real Matterbridge** and watching the log.
@@ -25,7 +25,7 @@ grep the log. Startup is fast; the Ecovacs cloud call happens right after
 
 ## What to look for
 
-- `Loaded plugin matterbridge-ecovacs type DynamicPlatform` — module entrypoint OK
+- `Loaded plugin matterbridge-ecovacs-vacuum type DynamicPlatform` — module entrypoint OK
 - `Initializing Ecovacs Platform...` — constructor + version check passed
 - No credentials in config → `Ecovacs credentials are not configured...` (clean error, bridge keeps running)
 - Bogus credentials → `Failed to connect to Ecovacs cloud: Failure code 1010: Incorrect account or password`
@@ -34,7 +34,7 @@ grep the log. Startup is fast; the Ecovacs cloud call happens right after
 - Real credentials → `Found device: <name> (class: <class>)`, `Using model profile: ...`,
   `Discovered N room(s): ...`, `<name> registered as Matter RVC device with N room(s)`
 
-Plugin config lives at `$MBHOME/.matterbridge/matterbridge-ecovacs.config.json`
+Plugin config lives at `$MBHOME/.matterbridge/matterbridge-ecovacs-vacuum.config.json`
 (created from the repo's default config on first run) — edit it between runs to
 change credentials/country.
 

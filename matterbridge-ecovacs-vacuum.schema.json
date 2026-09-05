@@ -41,7 +41,7 @@
     },
     "deviceId": {
       "title": "Ecovacs Device ID (advanced)",
-      "description": "Leave empty to generate one automatically. Ecovacs ties its one-time email device verification to this ID, so set it explicitly to reuse an already-verified ID — e.g. one verified from another machine with 'npx matterbridge-ecovacs-verify --device-id'.",
+      "description": "Leave empty to generate one automatically. Ecovacs ties its one-time email device verification to this ID, so set it explicitly to reuse an already-verified ID — e.g. one verified from another machine with 'npx matterbridge-ecovacs-vacuum-verify --device-id'.",
       "type": "string"
     },
     "debug": {

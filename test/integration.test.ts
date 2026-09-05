@@ -92,7 +92,7 @@ describe('Matter integration', () => {
   let rvc: any;
 
   const config: PlatformConfig = {
-    name: 'matterbridge-ecovacs',
+    name: 'matterbridge-ecovacs-vacuum',
     type: 'DynamicPlatform',
     version: '1.0.0',
     username: 'test@example.com',
@@ -118,7 +118,7 @@ describe('Matter integration', () => {
     await startMatterbridgeEnvironment(5560);
 
     platform = new EcovacsPlatform(matterbridge as unknown as PlatformMatterbridge, new AnsiLogger({ logName: 'EcovacsIntegration' }), config);
-    addMatterbridgePlatform(platform, 'matterbridge-ecovacs');
+    addMatterbridgePlatform(platform, 'matterbridge-ecovacs-vacuum');
 
     await platform.onStart('integration');
     // The plugin builds its endpoint from the vacbot's 'ready' event

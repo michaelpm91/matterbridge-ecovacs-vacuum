@@ -121,7 +121,7 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
         this.log.error(
           `This Ecovacs device ID has not completed device verification. Run the verification once, ` +
             `then restart the plugin:\n` +
-            `    npx matterbridge-ecovacs-verify ${cfg.username} <password> ${cfg.country} ${cfg.continent} --device-id ${deviceId}\n` +
+            `    npx matterbridge-ecovacs-vacuum-verify ${cfg.username} <password> ${cfg.country} ${cfg.continent} --device-id ${deviceId}\n` +
             `It can be run from any machine (it does not have to be this host) — Ecovacs emails a code to the account address. ` +
             `Keep the device ID stable afterwards: set "deviceId": "${deviceId}" in the plugin config if you may reinstall or move hosts.`,
         );
@@ -233,7 +233,7 @@ export class EcovacsPlatform extends MatterbridgeDynamicPlatform {
         } else {
           this.log.warn(
             `Unknown Ecovacs device class '${vacuum.class}' — using the default profile (vacuum only). ` +
-              `Please open an issue at https://github.com/michaelpm91/matterbridge-ecovacs/issues with this line so the model can be added.`,
+              `Please open an issue at https://github.com/michaelpm91/matterbridge-ecovacs-vacuum/issues with this line so the model can be added.`,
           );
         }
         device = new VacuumDevice(this, this.log, vacuum, definition);

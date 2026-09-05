@@ -126,7 +126,7 @@ const mockMatterbridge: PlatformMatterbridge = {
 } as unknown as PlatformMatterbridge;
 
 const mockConfig: PlatformConfig = {
-  name: 'matterbridge-ecovacs',
+  name: 'matterbridge-ecovacs-vacuum',
   type: 'DynamicPlatform',
   version: '1.0.0',
   username: 'test@example.com',
@@ -377,7 +377,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     mockApi.connect.mockRejectedValueOnce(new Error('Failure code 1013: Please update to the latest version to continue.'));
     await instance.onStart('device-verification-test');
     expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('Failure code 1013'));
-    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('npx matterbridge-ecovacs-verify'));
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('npx matterbridge-ecovacs-vacuum-verify'));
     expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('--device-id device-id'));
   });
 
