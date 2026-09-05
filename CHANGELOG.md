@@ -11,6 +11,8 @@ First release published to npm, under the new name.
 
 ### Changed
 
+- **Attribute writes are serialised instead of fired all at once**, which makes commands from a controller less likely to fail while the robot is reporting. Each write holds a lock on its cluster for as long as its transaction is open, and Matterbridge's `pause`/`resume`/`goHome` set `RvcRunMode.currentMode` _synchronously_ inside the command — a synchronous lock request throws rather than waiting, so a write of ours still in flight failed the whole command ("could not complete" in the controller). A single state change used to open up to six writes at once, and the robot pushes one about every second while it works, so the locks were held far more of the time than the writes themselves take. This narrows the window rather than closing it: only Matterbridge acquiring those locks asynchronously would do that.
+
 - The device-verification command is documented as the bare `matterbridge-ecovacs-vacuum-verify` rather than `npx matterbridge-ecovacs-vacuum-verify`. `npx` resolves a bare command name to a package of that name, and no such package exists — so the documented form failed on exactly the off-host machine the `--device-id` flag exists to serve. Running it elsewhere needs `npx -p matterbridge-ecovacs-vacuum`, which is now spelled out.
 
 - **Renamed to `matterbridge-ecovacs-vacuum`.** `matterbridge-ecovacs` is taken on npm by an unrelated plugin (bubez81's), and Matterbridge installs plugins by npm package name, so the two could not coexist. The verification CLI is now `matterbridge-ecovacs-vacuum-verify` and the config file `matterbridge-ecovacs-vacuum.config.json`.

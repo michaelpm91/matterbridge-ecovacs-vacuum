@@ -207,6 +207,9 @@ export class VacuumDevice {
   /** Last known battery percentage — used to determine IsAtFullCharge */
   private lastBatteryPct: number = 0;
 
+  /** Tail of the serialised endpoint writes; see {@link enqueueWrite}. */
+  private writeQueue: Promise<void> = Promise.resolve();
+
   /**
    * True when the robot is paused (either by our pause command or CleanReport: pause).
    * Used to send vacbot.resume() instead of startClean() when HomeKit sends changeToMode
@@ -445,12 +448,8 @@ export class VacuumDevice {
       if (rvc === null) return;
       const pct = Math.round(battery);
       const level = pct > 20 ? BAT_CHARGE_LEVEL.Ok : pct > 5 ? BAT_CHARGE_LEVEL.Warning : BAT_CHARGE_LEVEL.Critical;
-      rvc.setAttribute('powerSource', 'batPercentRemaining', pct * 2, this.log).catch((err: unknown) => {
-        this.log.debug(`setAttribute batPercentRemaining error: ${String(err)}`);
-      });
-      rvc.setAttribute('powerSource', 'batChargeLevel', level, this.log).catch((err: unknown) => {
-        this.log.debug(`setAttribute batChargeLevel error: ${String(err)}`);
-      });
+      this.writeAttribute('powerSource', 'batPercentRemaining', pct * 2);
+      this.writeAttribute('powerSource', 'batChargeLevel', level);
       this.lastBatteryPct = pct;
       // Battery level feeds the resolved state: reaching 100% while charging
       // upgrades to IsAtFullCharge/Docked.
@@ -538,6 +537,74 @@ export class VacuumDevice {
   }
 
   /**
+   * Run an endpoint write, one at a time.
+   *
+   * Each write opens its own Matter transaction and locks the cluster's state
+   * for as long as it runs. Matterbridge's own pause/resume/goHome handlers set
+   * RvcRunMode.currentMode *synchronously* inside the command invocation, and a
+   * synchronous lock request throws outright rather than waiting — so a lock
+   * still held by one of our writes fails the whole command, which the
+   * controller reports as "could not complete".
+   *
+   * A single state change used to fire up to six writes at once (run mode,
+   * operational state, serviced area, charge state, battery level and
+   * percentage), and the robot pushes one roughly every second while it works,
+   * so the locks were held far more often than the writes themselves take.
+   * Queueing them narrows that to one short write at a time.
+   *
+   * This cannot close the window completely — a command can always arrive
+   * during the one write still in flight. Matterbridge acquiring those locks
+   * asynchronously is the only complete fix, and that is its call to make.
+   *
+   * @param {string} label - Identifies the write in error logs.
+   * @param {() => Promise<unknown>} op - The write to run.
+   */
+  private enqueueWrite(label: string, op: () => Promise<unknown>): void {
+    const previous = this.writeQueue;
+    this.writeQueue = (async () => {
+      await previous;
+      try {
+        await op();
+      } catch (err: unknown) {
+        // Swallowed deliberately: one failed write must not stall the queue.
+        this.log.debug(`${label} error: ${String(err)}`);
+      }
+    })();
+  }
+
+  /**
+   * Queue an attribute write.
+   *
+   * @param {string} cluster - The cluster to write to.
+   * @param {string} attribute - The attribute to write.
+   * @param {string | number | bigint | boolean | object | null} value - The value to write.
+   */
+  private writeAttribute(cluster: string, attribute: string, value: string | number | bigint | boolean | object | null): void {
+    const rvc = this.liveRvc;
+    if (rvc === null) return;
+    this.enqueueWrite(`setAttribute ${cluster}.${attribute}`, () => rvc.setAttribute(cluster, attribute, value, this.log));
+  }
+
+  /**
+   * Resolve once every queued write has finished and the endpoint is quiescent.
+   *
+   * Writes are deliberately not awaited by the push handlers that trigger them,
+   * so this is the only way to know they have landed — tests need it to drive a
+   * command without racing the writes from the state they just set up.
+   *
+   * @returns {Promise<void>} Resolves when no write is outstanding.
+   */
+  async whenWritesSettled(): Promise<void> {
+    // Awaiting the tail can queue more writes behind it, so keep going until the
+    // queue stops growing.
+    let tail: Promise<void>;
+    do {
+      tail = this.writeQueue;
+      await tail;
+    } while (tail !== this.writeQueue);
+  }
+
+  /**
    * Run a command sequence in the background.
    *
    * Sequences that wait for a command to settle must not block the handler:
@@ -619,9 +686,10 @@ export class VacuumDevice {
   private triggerOperationCompletion(): void {
     if (this.rvc === null) return;
     this.log.info('Cleaning run ended — triggering operationCompletion');
-    this.rvc.triggerEvent('rvcOperationalState', 'operationCompletion', { completionErrorCode: RVC_ERROR.NoError }, this.log).catch((err: unknown) => {
-      this.log.debug(`triggerEvent operationCompletion error: ${String(err)}`);
-    });
+    const rvc = this.rvc;
+    this.enqueueWrite('triggerEvent operationCompletion', () =>
+      rvc.triggerEvent('rvcOperationalState', 'operationCompletion', { completionErrorCode: RVC_ERROR.NoError }, this.log),
+    );
   }
 
   private setRvcState(runMode: number, opState: number): void {
@@ -632,15 +700,11 @@ export class VacuumDevice {
     }
     if (runMode !== this.lastRunMode) {
       this.lastRunMode = runMode;
-      rvc.setAttribute('rvcRunMode', 'currentMode', runMode, this.log).catch((err: unknown) => {
-        this.log.debug(`setAttribute rvcRunMode.currentMode error: ${String(err)}`);
-      });
+      this.writeAttribute('rvcRunMode', 'currentMode', runMode);
     }
     if (opState !== this.lastOpState) {
       this.lastOpState = opState;
-      rvc.setAttribute('rvcOperationalState', 'operationalState', opState, this.log).catch((err: unknown) => {
-        this.log.debug(`setAttribute rvcOperationalState.operationalState error: ${String(err)}`);
-      });
+      this.writeAttribute('rvcOperationalState', 'operationalState', opState);
     }
   }
 
@@ -659,9 +723,7 @@ export class VacuumDevice {
     if (rvc === null || areaId === this.lastCurrentArea) return;
     this.lastCurrentArea = areaId;
     this.log.info(`ServiceArea currentArea → ${areaId ?? 'null'}`);
-    rvc.setAttribute('serviceArea', 'currentArea', areaId, this.log).catch((err: unknown) => {
-      this.log.debug(`setAttribute serviceArea.currentArea error: ${String(err)}`);
-    });
+    this.writeAttribute('serviceArea', 'currentArea', areaId);
   }
 
   /**
@@ -710,9 +772,7 @@ export class VacuumDevice {
     if (rvc === null) return;
     if (errorId === this.lastErrorId) return;
     this.lastErrorId = errorId;
-    rvc.setAttribute('rvcOperationalState', 'operationalError', { errorStateId: errorId }, this.log).catch((err: unknown) => {
-      this.log.debug(`setAttribute rvcOperationalState.operationalError error: ${String(err)}`);
-    });
+    this.writeAttribute('rvcOperationalState', 'operationalError', { errorStateId: errorId });
   }
 
   private setBatChargeState(state: number): void {
@@ -720,9 +780,7 @@ export class VacuumDevice {
     if (rvc === null) return;
     if (state === this.lastBatChargeState) return;
     this.lastBatChargeState = state;
-    rvc.setAttribute('powerSource', 'batChargeState', state, this.log).catch((err: unknown) => {
-      this.log.debug(`setAttribute powerSource.batChargeState error: ${String(err)}`);
-    });
+    this.writeAttribute('powerSource', 'batChargeState', state);
   }
 
   // ── Matter device creation ──────────────────────────────────────────────────

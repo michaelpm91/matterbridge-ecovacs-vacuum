@@ -166,6 +166,13 @@ describe('Matterbridge Ecovacs Plugin', () => {
   // The bridged X2 device created by the platform during onStart (typed loosely for private-field access).
   const device = (): any => (instance as any)?.vacuums?.get('test-did');
 
+  // Attribute writes are queued one at a time rather than all fired at once, so
+  // a single microtask no longer covers them — wait for the queue itself.
+  const settle = async (): Promise<void> => {
+    await Promise.resolve();
+    await device()?.whenWritesSettled();
+  };
+
   beforeAll(() => {
     // Use fake timers so setInterval/setTimeout don't leak; setImmediate stays real
     // so `await new Promise((r) => setImmediate(r))` still works in tests.
@@ -528,7 +535,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     eventHandlers['BatteryInfo']?.(75); // > 20 → Ok (0)
     eventHandlers['BatteryInfo']?.(15); // > 5, ≤ 20 → Warning (1)
     eventHandlers['BatteryInfo']?.(3); //  ≤ 5 → Critical (2)
-    await Promise.resolve();
+    await settle();
     expect(mockLog.debug).toHaveBeenCalledWith('Battery: 75% (level=0)');
     expect(mockLog.debug).toHaveBeenCalledWith('Battery: 15% (level=1)');
     expect(mockLog.debug).toHaveBeenCalledWith('Battery: 3% (level=2)');
@@ -551,7 +558,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     eventHandlers['CleanReport']?.('returning');
     eventHandlers['CleanReport']?.('stop');
     eventHandlers['CleanReport']?.('idle');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.info).toHaveBeenCalledWith('CleanReport: auto');
     expect(mockLog.info).toHaveBeenCalledWith('CleanReport: pause');
     expect(mockLog.info).toHaveBeenCalledWith('CleanReport: returning');
@@ -562,7 +569,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // ecovacs-deebot emits CleanReport(undefined) when the robot reports type='freeClean'
     // because 'freeClean' is not in CLEAN_MODE_FROM_ECOVACS. We normalise it to 'spot_area'.
     eventHandlers['CleanReport']?.(undefined as any);
-    await Promise.resolve();
+    await settle();
     expect(mockLog.info).toHaveBeenCalledWith('CleanReport: spot_area');
   });
 
@@ -575,7 +582,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().lastChargeStatus = 'charging';
     device().lastBatteryPct = 80; // charging below full → resolved state is Charging
     eventHandlers['CleanReport']?.('pause');
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x02, expect.anything());
     // Not treated as a resumable mid-floor pause
     expect(device().isRobotPaused).toBe(false);
@@ -591,12 +598,12 @@ describe('Matterbridge Ecovacs Plugin', () => {
     const spy = jest.spyOn(device().rvc, 'setAttribute').mockResolvedValue(undefined);
 
     eventHandlers['CleanReport']?.('auto'); // robot is cleaning
-    await Promise.resolve();
+    await settle();
     spy.mockClear();
 
     for (const activity of ['washing', 'drying', 'airdrying']) {
       eventHandlers['CleanReport']?.(activity);
-      await Promise.resolve();
+      await settle();
     }
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
     expect(device().cleanState).toBe(0x01); // still Running
@@ -612,7 +619,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // Set resumePending = true to simulate having just sent resume
     device().resumePending = true;
     eventHandlers['CleanReport']?.('pause');
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x02, expect.anything());
     expect(device().resumePending).toBe(false); // flag cleared after discard
     expect(device().isRobotPaused).toBe(false);
@@ -630,7 +637,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().lastRunMode = 1;
 
     eventHandlers['ChargeState']?.('idle');
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x42, expect.anything());
 
     spy.mockRestore();
@@ -644,14 +651,14 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // Robot starts cleaning → lastRunMode = Cleaning
     eventHandlers['CleanReport']?.('auto');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x01, expect.anything()); // Running
 
     // Dock fires ChargeState: charging → must be ignored (robot is cleaning)
     spy.mockClear();
     device().lastBatteryPct = 100; // would trigger IsAtFullCharge + Docked if not guarded
     eventHandlers['ChargeState']?.('charging');
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
     // The raw dock status is still recorded — it decides the state once cleaning ends
     expect(device().lastChargeStatus).toBe('charging');
@@ -665,13 +672,13 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // Robot cleaning → lastRunMode = Cleaning, lastChargeStatus = 'charging'
     eventHandlers['CleanReport']?.('auto');
-    await Promise.resolve();
+    await settle();
     device().lastChargeStatus = 'charging';
     spy.mockClear();
 
     // BatteryInfo at 100% must not knock the robot out of Running
     eventHandlers['BatteryInfo']?.(100);
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
 
     spy.mockRestore();
@@ -682,7 +689,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     eventHandlers['ChargeState']?.('returning');
     eventHandlers['ChargeState']?.('charging');
     eventHandlers['ChargeState']?.('idle');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.info).toHaveBeenCalledWith('ChargeState: returning');
     expect(mockLog.info).toHaveBeenCalledWith('ChargeState: charging');
     expect(mockLog.info).toHaveBeenCalledWith('ChargeState: idle');
@@ -694,21 +701,21 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // charging at 80% → OP_STATE.Charging + IsCharging (1)
     device().lastBatteryPct = 80;
     eventHandlers['ChargeState']?.('charging');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 1, expect.anything());
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x41, expect.anything()); // Charging
 
     // idle → IsNotCharging (3) — different from previous (1) so attribute fires
     spy.mockClear();
     eventHandlers['ChargeState']?.('idle');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 3, expect.anything());
 
     // returning → IsNotCharging (3) — reset dedup counter first so the call fires
     device().lastBatChargeState = -1;
     spy.mockClear();
     eventHandlers['ChargeState']?.('returning');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 3, expect.anything());
 
     spy.mockRestore();
@@ -721,7 +728,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // charging at 100% → OP_STATE.Docked + IsAtFullCharge (2)
     device().lastBatteryPct = 100;
     eventHandlers['ChargeState']?.('charging');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 2, expect.anything()); // IsAtFullCharge
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x42, expect.anything()); // Docked
 
@@ -738,7 +745,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // BatteryInfo fires at 100% → updateChargeState() upgrades to IsAtFullCharge + Docked
     eventHandlers['BatteryInfo']?.(100);
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 2, expect.anything()); // IsAtFullCharge
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x42, expect.anything()); // Docked
 
@@ -751,7 +758,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     device().lastChargeStatus = 'idle';
     eventHandlers['BatteryInfo']?.(50);
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 3, expect.anything()); // IsNotCharging
     expect(spy).not.toHaveBeenCalledWith('powerSource', 'batChargeState', 1, expect.anything());
     expect(spy).not.toHaveBeenCalledWith('powerSource', 'batChargeState', 2, expect.anything());
@@ -772,7 +779,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
   it('should handle ErrorCode events — map to RVC error and log warnings', async () => {
     // Known error: 322 → WaterTankEmpty (0x44), logs a warning with description
     eventHandlers['ErrorCode']?.('322');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('322'));
     expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('Clean water tank empty'));
 
@@ -780,14 +787,14 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // Unknown error code → UnableToCompleteOperation (0x02), still logs a warning
     eventHandlers['ErrorCode']?.('999');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('999'));
 
     jest.clearAllMocks();
 
     // NoError (code 0) → no warning, debug only
     eventHandlers['ErrorCode']?.('0');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.warn).not.toHaveBeenCalled();
     expect(mockLog.debug).toHaveBeenCalledWith('ErrorCode: 0 (no error / transient)');
 
@@ -795,7 +802,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // Code 323 → DustBinFull (dirty water tank full), logs a warning with description
     eventHandlers['ErrorCode']?.('323');
-    await Promise.resolve();
+    await settle();
     expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('323'));
     expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('Dirty water tank full'));
   });
@@ -806,7 +813,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // Simulate poll sequence: ChargeState('charging') → then CleanReport('idle')
     eventHandlers['ChargeState']?.('charging');
     eventHandlers['CleanReport']?.('idle');
-    await Promise.resolve();
+    await settle();
 
     // Every operationalState setAttribute call should be 0x41 (Charging), never 0x42 (Docked)
     const opStateCalls = spy.mock.calls.filter((c) => c[1] === 'operationalState');
@@ -818,7 +825,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     spy.mockClear();
     eventHandlers['ChargeState']?.('returning');
     eventHandlers['CleanReport']?.('stop');
-    await Promise.resolve();
+    await settle();
     const opStateCalls2 = spy.mock.calls.filter((c) => c[1] === 'operationalState');
     for (const call of opStateCalls2) {
       expect(call[2]).toBe(0x40); // SeekingCharger, not Docked (0x42)
@@ -828,7 +835,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     spy.mockClear();
     eventHandlers['ChargeState']?.('idle');
     eventHandlers['CleanReport']?.('stop');
-    await Promise.resolve();
+    await settle();
     const opStateCalls3 = spy.mock.calls.filter((c) => c[1] === 'operationalState');
     const lastDockedCall = opStateCalls3[opStateCalls3.length - 1];
     expect(lastDockedCall?.[2]).toBe(0x42); // Docked
@@ -841,32 +848,75 @@ describe('Matterbridge Ecovacs Plugin', () => {
 
     // First CleanReport: new values → both setAttribute calls fire
     eventHandlers['CleanReport']?.('auto'); // Running(1), Cleaning(2)
-    await Promise.resolve();
+    await settle();
     const firstCallCount = spy.mock.calls.length;
     expect(firstCallCount).toBeGreaterThan(0);
 
     // Second identical CleanReport: same values → no setAttribute calls
     spy.mockClear();
     eventHandlers['CleanReport']?.('auto');
-    await Promise.resolve();
+    await settle();
     expect(spy).not.toHaveBeenCalledWith('rvcRunMode', 'currentMode', expect.anything(), expect.anything());
     expect(spy).not.toHaveBeenCalledWith('rvcOperationalState', 'operationalState', expect.anything(), expect.anything());
 
     // State change: different values → setAttribute fires again
     spy.mockClear();
     eventHandlers['CleanReport']?.('stop'); // Idle(1), Docked(0x42)
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x42, expect.anything());
 
     spy.mockRestore();
+  });
+
+  it('should write attributes one at a time rather than all at once', async () => {
+    // Each write holds a lock on its cluster for as long as its transaction is
+    // open. Matterbridge's pause/resume/goHome set RvcRunMode synchronously
+    // inside the command, and a synchronous lock request throws rather than
+    // waiting — so overlapping writes fail the controller's command outright
+    // ("could not complete"). One state change used to open up to six at once.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const release: (() => void)[] = [];
+    const spy = jest.spyOn(device().rvc, 'setAttribute').mockImplementation(() => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      return new Promise<void>((resolve) => {
+        release.push(() => {
+          inFlight -= 1;
+          resolve();
+        });
+      });
+    });
+
+    // A charging robot at a new battery level writes battery percentage, charge
+    // level, charge state and the resolved run/operational state together.
+    const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+    device().lastChargeStatus = 'charging';
+    eventHandlers['BatteryInfo']?.(55);
+
+    // Drain by hand — settle() would hang, since nothing completes until released.
+    // Every queued write must be let go, or the queue stays blocked for the rest
+    // of the suite.
+    await tick();
+    for (let i = 0; i < 20 && (inFlight > 0 || release.length > 0); i++) {
+      release.shift()?.();
+      await tick();
+    }
+
+    expect(spy.mock.calls.length).toBeGreaterThan(1); // several writes really were made
+    expect(maxInFlight).toBe(1);
+    expect(inFlight).toBe(0); // queue left drained for the next test
+
+    spy.mockRestore();
+    device().lastChargeStatus = 'idle';
   });
 
   it('should log setAttribute errors in BatteryInfo handler', async () => {
     const spy = jest.spyOn(device().rvc, 'setAttribute').mockRejectedValue(new Error('set failed'));
     eventHandlers['BatteryInfo']?.(75);
     await new Promise((resolve) => setImmediate(resolve));
-    expect(mockLog.debug).toHaveBeenCalledWith(expect.stringContaining('setAttribute batPercentRemaining error:'));
-    expect(mockLog.debug).toHaveBeenCalledWith(expect.stringContaining('setAttribute batChargeLevel error:'));
+    expect(mockLog.debug).toHaveBeenCalledWith(expect.stringContaining('setAttribute powerSource.batPercentRemaining error:'));
+    expect(mockLog.debug).toHaveBeenCalledWith(expect.stringContaining('setAttribute powerSource.batChargeLevel error:'));
     spy.mockRestore();
   });
 
@@ -900,7 +950,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
       device().lastRunMode = -1;
       spy.mockClear();
       eventHandlers['CleanReport']?.(mode);
-      await Promise.resolve();
+      await settle();
       expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x01, expect.anything());
       expect(spy).toHaveBeenCalledWith('rvcRunMode', 'currentMode', 2, expect.anything());
     }
@@ -911,7 +961,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     const spy = jest.spyOn(device().rvc, 'setAttribute').mockResolvedValue(undefined);
 
     eventHandlers['CleanReport']?.('goCharging');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x40, expect.anything()); // SeekingCharger
 
     // slot_charging is the dock's own wording for charging
@@ -919,7 +969,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     device().lastBatteryPct = 50;
     spy.mockClear();
     eventHandlers['ChargeState']?.('slot_charging');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('rvcOperationalState', 'operationalState', 0x41, expect.anything()); // Charging
     expect(spy).toHaveBeenCalledWith('powerSource', 'batChargeState', 1, expect.anything()); // IsCharging
 
@@ -1048,7 +1098,7 @@ describe('Matterbridge Ecovacs Plugin', () => {
     spy.mockClear();
     device().lastRunMode = -1;
     eventHandlers['CleanReport']?.('spot_area');
-    await Promise.resolve();
+    await settle();
     expect(spy).toHaveBeenCalledWith('rvcRunMode', 'currentMode', 4, expect.anything());
 
     spy.mockRestore();

@@ -21,6 +21,14 @@
  * not complete" in HomeKit) was produced, and it does NOT reproduce here.
  * Covering that would need a commissioned matter.js ClientNode driving the
  * server over the wire.
+ *
+ * A related conflict does reach this layer, though, and every command here is
+ * issued only once the plugin's writes have settled (see `settle` below).
+ * Matterbridge's own pause/resume/goHome set RvcRunMode.currentMode
+ * synchronously inside the command, so an in-flight write of ours fails the
+ * whole command with "Cannot lock ... synchronously". Serialising our writes
+ * shrinks that window but cannot close it; only Matterbridge acquiring those
+ * locks asynchronously would.
  */
 
 import { jest } from '@jest/globals';
@@ -107,10 +115,21 @@ describe('Matter integration', () => {
   // Read an attribute straight off the endpoint, as a controller subscription would.
   const attr = (cluster: string, name: string): unknown => rvc.getAttribute(cluster, name);
 
+  // Let every write the plugin queued actually land. flushAsync alone only turns
+  // the event loop over: the plugin's writes are deliberately not awaited by the
+  // handlers that trigger them, so a command invoked straight after a push could
+  // hit a still-open write transaction and fail with "Cannot lock ...
+  // synchronously" — Matterbridge's pause/resume/goHome set RvcRunMode
+  // synchronously inside the command.
+  const settle = async (): Promise<void> => {
+    await flushAsync();
+    await (platform.vacuums.get('test-did') as unknown as { whenWritesSettled(): Promise<void> }).whenWritesSettled();
+  };
+
   // Invoke a cluster command the way a Matter controller does.
   const invoke = async (cluster: string, command: string, params?: Record<string, unknown>): Promise<void> => {
     await rvc.invokeBehaviorCommand(cluster, command, params);
-    await flushAsync();
+    await settle();
   };
 
   beforeAll(async () => {
@@ -146,7 +165,7 @@ describe('Matter integration', () => {
     eventHandlers['CleanReport']?.('idle');
     eventHandlers['ChargeState']?.('charging');
     eventHandlers['BatteryInfo']?.(80);
-    await flushAsync();
+    await settle();
   });
 
   it('registers the robot as an RVC device with its rooms', () => {
@@ -200,12 +219,12 @@ describe('Matter integration', () => {
 
     // Once it reports the room it is in, that becomes the serviced area
     eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '2' });
-    await flushAsync();
+    await settle();
     expect(attr('serviceArea', 'currentArea')).toBe(3);
 
     // The robot's own report must not downgrade the mode to plain Cleaning
     eventHandlers['CleanReport']?.('spot_area');
-    await flushAsync();
+    await settle();
     expect(writes).not.toHaveBeenCalledWith('rvcRunMode', 'currentMode', RUN.Cleaning, expect.anything());
     expect(attr('rvcRunMode', 'currentMode')).toBe(RUN.SpotCleaning);
     writes.mockRestore();
@@ -228,13 +247,13 @@ describe('Matter integration', () => {
 
     // The robot confirms, and the dock takes over the reported state
     eventHandlers['CleanReport']?.('returning');
-    await flushAsync();
+    await settle();
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.SeekingCharger);
 
     eventHandlers['ChargeState']?.('charging');
     eventHandlers['BatteryInfo']?.(80);
     eventHandlers['CleanReport']?.('idle');
-    await flushAsync();
+    await settle();
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Charging);
     expect(attr('rvcRunMode', 'currentMode')).toBe(RUN.Idle);
   });
@@ -243,12 +262,12 @@ describe('Matter integration', () => {
     await invoke('serviceArea', 'selectAreas', { newAreas: [2] });
     await invoke('rvcRunMode', 'changeToMode', { newMode: RUN.SpotCleaning });
     eventHandlers['DeebotPosition']?.({ currentSpotAreaID: '1' });
-    await flushAsync();
+    await settle();
     expect(attr('serviceArea', 'currentArea')).toBe(2);
 
     eventHandlers['CleanReport']?.('idle');
     eventHandlers['ChargeState']?.('charging');
-    await flushAsync();
+    await settle();
     expect(attr('serviceArea', 'currentArea')).toBeNull();
   });
 
@@ -256,20 +275,20 @@ describe('Matter integration', () => {
     // ecovacs-deebot signals its own failures with negative codes; surfacing
     // them put the endpoint into Error, which controllers show as an alert.
     eventHandlers['CleanReport']?.('auto');
-    await flushAsync();
+    await settle();
     eventHandlers['ErrorCode']?.('-2');
-    await flushAsync();
+    await settle();
     expect((attr('rvcOperationalState', 'operationalError') as { errorStateId: number }).errorStateId).toBe(0);
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
   });
 
   it('does not let a mop-pad wash disturb the reported state', async () => {
     eventHandlers['CleanReport']?.('auto');
-    await flushAsync();
+    await settle();
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
 
     for (let i = 0; i < 5; i++) eventHandlers['CleanReport']?.('washing');
-    await flushAsync();
+    await settle();
     expect(attr('rvcOperationalState', 'operationalState')).toBe(OP.Running);
   });
 });
