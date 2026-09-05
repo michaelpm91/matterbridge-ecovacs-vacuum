@@ -1126,7 +1126,10 @@ describe('Matterbridge Ecovacs Plugin', () => {
     // Vacuum-only: work mode pinned to 1, and setSweepMode never sent (pad-wash trigger).
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'setWorkMode', { mode: 1 });
     expect(mockVacbot.run).not.toHaveBeenCalledWith('DisableSweepMode');
-    // Areas 1,2 (Matter IDs) map to Ecovacs IDs '0','1'; freeClean value = "1,0;1,1"
+    // Areas 1,2 (Matter IDs) map to Ecovacs IDs '0','1'; freeClean value = "1,0;1,1",
+    // matching the shape the Ecovacs app sends for a two-room clean. The leading
+    // 1 is the pass count and is always 1: per-room passes live in the map's
+    // `cleanset`, and raising it here makes the robot fail to find the room.
     expect(mockVacbot.run).toHaveBeenCalledWith('Generic', 'clean_V2', {
       act: 'start',
       content: { count: 1, donotClean: '', type: 'freeClean', value: '1,0;1,1' },

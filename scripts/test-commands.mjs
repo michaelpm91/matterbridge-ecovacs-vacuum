@@ -117,22 +117,30 @@ vacbot.ecovacs.sendCommand = async (cmd) => {
   return _origSend(cmd);
 };
 
+/** Pushes that arrive constantly and would bury anything interesting. */
+const QUIET_PUSHES = ['pos', 'mapinfo', 'majormap', 'minormap', 'maptrace', 'mapset', 'mapsubset', 'lifespan', 'stats', 'evt'];
+
 const _origHandleMsg = vacbot.ecovacs.handleMessage.bind(vacbot.ecovacs);
 vacbot.ecovacs.handleMessage = (topic, message, type = 'incoming') => {
-  // For command responses, surface the body code so we can see rejections
-  if (type === 'response') {
-    try {
-      const parsed = typeof message === 'string' ? JSON.parse(message) : message;
-      const code = parsed?.body?.code;
-      const msg = parsed?.body?.msg ?? '';
-      const cmd = topic ?? '?';
+  try {
+    const parsed = typeof message === 'string' ? JSON.parse(message) : message;
+    const body = parsed?.body;
+    const name = parsed?.header?.name ?? topic ?? '?';
+    if (type === 'response') {
+      // Responses to commands we sent: surface the body code so silent
+      // rejections (which the library swallows) are visible.
+      const code = body?.code;
       if (code !== 0 && code !== undefined) {
-        console.log(`  ← RX [${cmd}]  REJECTED  body.code=${code} msg="${msg}"`);
+        console.log(`  ← RX [${name}]  REJECTED  body.code=${code} msg="${body?.msg ?? ''}"`);
       } else {
-        console.log(`  ← RX [${cmd}]  ok  ${JSON.stringify(parsed?.body?.data ?? '')}`);
+        console.log(`  ← RX [${name}]  ok  ${JSON.stringify(body?.data ?? '')}`);
       }
-    } catch {}
-  }
+    } else if (!QUIET_PUSHES.some((n) => String(name).toLowerCase().includes(n))) {
+      // Robot pushes. Anything changed in the Ecovacs app arrives here, which is
+      // how we learn what the app actually sets without seeing its requests.
+      console.log(`  ⇐ PUSH [${name}]  ${JSON.stringify(body?.data ?? body ?? '')}`);
+    }
+  } catch {}
   return _origHandleMsg(topic, message, type);
 };
 
@@ -146,7 +154,16 @@ vacbot.on('CleanReport', (v) => console.log(`  ← CleanReport:      ${v}`));
 vacbot.on('ChargeState', (v) => console.log(`  ← ChargeState:      ${v}`));
 vacbot.on('StationState', (v) => console.log(`  ← StationState:     ${JSON.stringify(v)}`));
 vacbot.on('WaterInfo', (v) => console.log(`  ← WaterInfo:        ${JSON.stringify(v)}  (sweepType: 0=combined/none, 1=mop-only)`));
+vacbot.on('CleanSpeed', (v) => console.log(`  ← CleanSpeed:       ${v}  (library level: 1=silent 2=normal 3=high 4=very high)`));
+vacbot.on('WaterLevel', (v) => console.log(`  ← WaterLevel:       ${v}  (1=low 2=medium 3=high 4=very high)`));
 vacbot.on('CurrentSpotAreas', (v) => console.log(`  ← CurrentSpotAreas: ${v}`));
+
+// The plugin decides "travelling" vs "cleaning room X" from currentSpotAreaID,
+// which the library derives from the robot's coordinates and the decoded map.
+// Log every position so we can see whether it ever resolves to a room.
+vacbot.on('DeebotPosition', (v) =>
+  console.log(`  ← DeebotPosition:   x=${v?.x} y=${v?.y} spotAreaID=${v?.currentSpotAreaID ?? '—'} name=${v?.currentSpotAreaName ?? '—'} invalid=${v?.invalid}`),
+);
 
 vacbot.on('CurrentMapMID', (mid) => {
   currentMapMID = mid;
@@ -205,8 +222,15 @@ function showMenu() {
   console.log('');
   console.log(' Clean (spot area) — run "r" first, then use IDs shown');
   console.log('  cf<id>  freeClean via clean_V2   e.g. cf0 cf15  ← X2-family strategy');
+  console.log('  cfr <count> <value>  raw freeClean probe, e.g. cfr 1 2,2');
   console.log('  cs<id>  SpotArea_V2              e.g. cs0 cs15  ← standard 950-type strategy');
   console.log('          (compare both to find out what a new model accepts)');
+  console.log('');
+  console.log(' Suction and water (compare with what the Ecovacs app sends)');
+  console.log('  sp<1-4>  SetCleanSpeed  e.g. sp1=silent sp2=normal sp3=high sp4=very high');
+  console.log('           (library remaps these to speed=1000/0/1/2 on the wire)');
+  console.log('  wl<1-4>  SetWaterLevel  e.g. wl1=low … wl4=very high');
+  console.log('  gs       getSpeed + getWaterInfo (read current values)');
   console.log('');
   console.log(' Work mode (the real Vacuum/Mop/Both selector — X1/X2 generation)');
   console.log('  wm      getWorkMode (poll current mode)');
@@ -283,17 +307,39 @@ rl.on('line', (line) => {
     vacbot.run('Clean');
   } else if (/^cf\d+$/.test(cmd)) {
     const areaId = cmd.slice(2);
-    // freeClean value format: "1,areaId" per room, joined with semicolons (from X2 app traffic).
+    // freeClean value format: "1,areaId" per room, joined with semicolons. Inferred,
+    // not captured — use `cfr` to probe what each field actually means.
     // No DisableSweepMode: sending setSweepMode(0) triggers the mop wash cycle at the station.
     const value = `1,${areaId}`;
     const payload = { act: 'start', content: { count: 1, donotClean: '', type: 'freeClean', value }, mode: '', router: 'plan' };
     console.log(`[test] → Generic('clean_V2', type=freeClean, value="${value}") (no setSweepMode)`);
+    vacbot.run('Generic', 'clean_V2', payload);
+  } else if (/^cfr\s+\d+\s+\S+$/.test(cmd)) {
+    // Raw freeClean probe: send an arbitrary count/value pair so the meaning of
+    // each field can be established by experiment rather than assumption.
+    //   cfr 1 2,2      count=1, value="2,2"
+    //   cfr 2 1,2;1,3  count=2, value="1,2;1,3"
+    const [, count, value] = cmd.split(/\s+/);
+    const payload = { act: 'start', content: { count: Number(count), donotClean: '', type: 'freeClean', value }, mode: '', router: 'plan' };
+    console.log(`[test] → Generic('clean_V2', ${JSON.stringify(payload.content)})`);
     vacbot.run('Generic', 'clean_V2', payload);
   } else if (/^cs\d+$/.test(cmd)) {
     const areaId = cmd.slice(2);
     // Standard 950-type V2 spot area command. Rejected by X2 firmware (body.code=20011).
     console.log(`[test] → SpotArea_V2('${areaId}', 1)`);
     vacbot.run('SpotArea_V2', areaId, 1);
+  } else if (/^sp[1-4]$/.test(cmd)) {
+    const level = Number(cmd.slice(2));
+    console.log(`[test] → SetCleanSpeed(${level})`);
+    vacbot.run('SetCleanSpeed', level);
+  } else if (/^wl[1-4]$/.test(cmd)) {
+    const level = Number(cmd.slice(2));
+    console.log(`[test] → SetWaterLevel(${level})`);
+    vacbot.run('SetWaterLevel', level);
+  } else if (cmd === 'gs') {
+    console.log('[test] → GetCleanSpeed + GetWaterInfo');
+    vacbot.run('GetCleanSpeed');
+    vacbot.run('GetWaterInfo');
   } else if (cmd === 'wm') {
     console.log('[test] → getWorkMode');
     vacbot.run('Generic', 'getWorkMode', {});
